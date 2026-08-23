@@ -313,11 +313,14 @@ function renderPreview() {
           cb.type = "checkbox";
           cb.dataset.entryIdx = String(entryIdx);
           cb.dataset.studentIdx = String(studentIdx);
-          // Pre-check any 100%-progress row regardless of turn-in status --
-          // matches the live Flask app's preview.html exactly (confirmed
-          // with Manuel 2026-08-22; the online-migration handoff doc's
-          // "only pre-check turned-in" description was stale).
-          cb.checked = s.progressPct >= 100;
+          // Pre-check only full-credit rows (100% progress AND turned in).
+          // 100%-progress-but-not-turned-in (80%-credit) rows are left
+          // unchecked on purpose -- pre-checking them made it too easy to
+          // submit-all without noticing, undercutting the whole point of
+          // the 80% tier as a turn-in incentive. Changed 2026-08-22 after
+          // Manuel caught this live; also fixed in the Flask app's
+          // preview.html to match.
+          cb.checked = s.progressPct >= 100 && s.turnedIn === true;
           tdCheck.appendChild(cb);
         } else {
           tdCheck.textContent = "—";
