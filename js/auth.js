@@ -13,10 +13,14 @@
 const OAUTH_CLIENT_ID =
   "8527216010-4k8cqguj42qjfa812a6m1b278ia5f7sj.apps.googleusercontent.com";
 
+// Matches SCOPES in typing-grader/grader/classroom_client.py exactly,
+// including classroom.topics -- needed for get_or_create_topic /
+// find_topic_by_name (the "Pending" topic assignments get filed under).
 const OAUTH_SCOPES = [
   "https://www.googleapis.com/auth/classroom.courses.readonly",
   "https://www.googleapis.com/auth/classroom.rosters.readonly",
   "https://www.googleapis.com/auth/classroom.coursework.students",
+  "https://www.googleapis.com/auth/classroom.topics",
 ].join(" ");
 
 let tokenClient = null;

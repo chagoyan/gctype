@@ -19,6 +19,7 @@ const {
   comparePeriodKeys,
   curriculumLessonGroups,
 } = require("../js/curriculum.js");
+const { buildAssignmentDescription } = require("../js/assignmentTemplate.js");
 
 let passed = 0;
 let failed = 0;
@@ -188,6 +189,15 @@ test("curriculumLessonGroups adds a brand-new unit from the plan too", () => {
   assert.ok(unitNames.includes("Brand New Unit"));
   // Not in UNIT_ORDER, so it should sort after all known units.
   assert.strictEqual(unitNames[unitNames.length - 1], "Brand New Unit");
+});
+
+console.log("\nassignmentTemplate.js");
+
+test("buildAssignmentDescription fills in every {lesson} placeholder, not just the first", () => {
+  const desc = buildAssignmentDescription("Learn the Keys 1: 1. J, F, and Space");
+  const occurrences = desc.split("Learn the Keys 1: 1. J, F, and Space").length - 1;
+  assert.strictEqual(occurrences, 2, `expected 2 occurrences, got ${occurrences}`);
+  assert.ok(!desc.includes("{lesson}"), "no unfilled {lesson} placeholder should remain");
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

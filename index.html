@@ -8,45 +8,91 @@
   <script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
 <body>
-  <header>
-    <h1>GCType</h1>
-    <p class="subtitle">Typing.com → Google Classroom auto-grader</p>
-    <button id="signin-btn">Sign in with Google</button>
-    <span id="auth-status"></span>
+  <header class="site-header">
+    <img src="assets/chslogo.png" alt="CHS Technology Pathway logo">
+    <div class="title-block">
+      <h1>Typing.com Auto-Grader</h1>
+      <p class="tagline">CHS Technology Pathway &mdash; GCType</p>
+    </div>
+    <div class="auth-block">
+      <button id="signin-btn">Sign in with Google</button>
+      <span id="auth-status"></span>
+    </div>
   </header>
 
+  <ul id="flash" class="flash"></ul>
+
   <main>
-    <!-- Step 1: Upload -->
+    <!-- View: Upload -->
     <section id="view-upload" class="view">
-      <h2>1. Upload Typing.com CSV export</h2>
+      <p>Upload a Typing.com "Lesson Details" CSV export. Grading rule: 100%
+        progress + turned in = full points; 100% progress but not turned in =
+        80%; under 100% progress = 0. Typing.com's own Grade/Stars/Accuracy
+        are not used. The CSV is parsed entirely in your browser &mdash; it is
+        never uploaded anywhere.</p>
       <input type="file" id="csv-input" accept=".csv">
     </section>
 
-    <!-- Step 2: Preview -->
+    <!-- View: Preview -->
     <section id="view-preview" class="view" hidden>
-      <h2>2. Preview & confirm grades</h2>
-      <div id="preview-table-container"></div>
-      <button id="submit-btn">Submit selected grades</button>
+
+      <h2 class="section-title">Create Assignments</h2>
+      <div class="filters">
+        <label>Class:
+          <select id="ahead-class"></select>
+        </label>
+        <label>Lesson:
+          <select id="ahead-lesson"></select>
+        </label>
+        <label>Points:
+          <input type="number" id="ahead-points" value="20" min="1" step="1" style="width: 5em;">
+        </label>
+        <label>Due date:
+          <input type="date" id="ahead-due-date">
+        </label>
+        <button id="create-assignment-btn" type="button">Create assignment</button>
+      </div>
+      <p class="muted">
+        Lists every active Classroom course and the full Typing.com curriculum
+        &mdash; independent of what's in this CSV &mdash; so you can set up a
+        class's assignment before any student, in any class, has touched
+        that lesson.
+      </p>
+
+      <h2 class="section-title">Update Grades</h2>
+      <p class="muted">
+        100% progress + turned in = full points. 100% progress but not turned in
+        = 80%. Under 100% progress = 0.
+      </p>
+      <button id="load-another-btn" class="button-link" type="button">Load CSV</button>
+
+      <div class="filters">
+        <label>Class:
+          <select id="filter-class"><option value="">All classes</option></select>
+        </label>
+        <label>Unit:
+          <select id="filter-unit"><option value="">All units</option></select>
+        </label>
+        <label>Lesson:
+          <select id="filter-lesson"><option value="">All lessons</option></select>
+        </label>
+      </div>
+
+      <div id="groups-container"></div>
+
+      <button id="submit-btn" type="button">Submit checked grades to Classroom</button>
     </section>
 
-    <!-- Step 3: Result -->
-    <section id="view-result" class="view" hidden>
-      <h2>3. Done</h2>
-      <div id="result-summary"></div>
-    </section>
-
-    <!-- Assignment auto-creation picker (used before grading if assignment doesn't exist yet) -->
-    <section id="view-create-assignment" class="view" hidden>
-      <h2>Create assignment</h2>
-      <label>Class <select id="create-class"></select></label>
-      <label>Lesson <select id="create-lesson"></select></label>
-      <label>Points <input type="number" id="create-points" value="100"></label>
-      <label>Due date <input type="date" id="create-due"></label>
-      <button id="create-assignment-btn">Create in Classroom</button>
+    <!-- View: Results -->
+    <section id="view-results" class="view" hidden>
+      <h1>Grading results</h1>
+      <button id="grade-another-btn" class="button-link" type="button">&larr; Grade another CSV</button>
+      <div id="results-container"></div>
     </section>
   </main>
 
   <script src="js/curriculum.js"></script>
+  <script src="js/assignmentTemplate.js"></script>
   <script src="js/csvParser.js"></script>
   <script src="js/matcher.js"></script>
   <script src="js/auth.js"></script>
