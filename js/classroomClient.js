@@ -8,10 +8,13 @@
 const CLASSROOM_API = "https://classroom.googleapis.com/v1";
 
 async function classroomFetch(path, options = {}) {
+  if (!isSignedIn()) {
+    throw new Error("Not signed in (or token expired) -- call signIn() first.");
+  }
   const res = await fetch(`${CLASSROOM_API}${path}`, {
     ...options,
     headers: {
-      Authorization: `Bearer ${accessToken}`,
+      Authorization: `Bearer ${getAccessToken()}`,
       "Content-Type": "application/json",
       ...(options.headers || {}),
     },

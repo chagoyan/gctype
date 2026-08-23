@@ -11,6 +11,14 @@ const assert = require("assert");
 
 const { parseTypingCsv, groupByClassAndLesson } = require("../js/csvParser.js");
 const { computeGrade, matchStudent, normalizeName } = require("../js/matcher.js");
+const {
+  CURRICULUM,
+  unitName,
+  naturalSort,
+  periodSortKey,
+  comparePeriodKeys,
+  curriculumLessonGroups,
+} = require("../js/curriculum.js");
 
 let passed = 0;
 let failed = 0;
@@ -111,6 +119,75 @@ test("flags not_found when no roster entry matches", () => {
 test("normalizeName collapses whitespace and case", () => {
   assert.strictEqual(normalizeName("  Emilio   "), "emilio");
   assert.strictEqual(normalizeName("Carmona  Santos"), "carmona santos");
+});
+
+console.log("\ncurriculum.js");
+
+test("unitName extracts the unit from '<Unit>: <N>. <Title>'", () => {
+  assert.strictEqual(unitName("Learn the Keys 1: 1. J, F, and Space"), "Learn the Keys 1");
+});
+
+test("unitName falls back to the whole string when there's no ': '", () => {
+  assert.strictEqual(unitName("Just for Fun"), "Just for Fun");
+});
+
+test("naturalSort orders embedded numbers numerically, not lexically", () => {
+  const input = [
+    "Learn the Keys 1: 10. Beginner Review 2",
+    "Learn the Keys 1: 2. U, R, and K Keys",
+    "Learn the Keys 1: 1. J, F, and Space",
+  ];
+  const sorted = naturalSort(input);
+  assert.deepStrictEqual(sorted, [
+    "Learn the Keys 1: 1. J, F, and Space",
+    "Learn the Keys 1: 2. U, R, and K Keys",
+    "Learn the Keys 1: 10. Beginner Review 2",
+  ]);
+});
+
+test("period sort interleaves preps by period number (P1, P2, ... before P10)", () => {
+  const classes = ["WAD-P10-S1-2627", "WPD-P1-S1-2627", "WAD-P2-S1-2627", "WPD-P2-S1-2627"];
+  const sorted = [...classes].sort((a, b) => comparePeriodKeys(periodSortKey(a), periodSortKey(b)));
+  assert.deepStrictEqual(sorted, ["WPD-P1-S1-2627", "WAD-P2-S1-2627", "WPD-P2-S1-2627", "WAD-P10-S1-2627"]);
+});
+
+test("classes without a P<number> sort after all that have one", () => {
+  const classes = ["WAD-P2-S1-2627", "Homeroom"];
+  const sorted = [...classes].sort((a, b) => comparePeriodKeys(periodSortKey(a), periodSortKey(b)));
+  assert.deepStrictEqual(sorted, ["WAD-P2-S1-2627", "Homeroom"]);
+});
+
+test("curriculumLessonGroups builds full titles in unit + numeric order", () => {
+  const groups = curriculumLessonGroups([]);
+  const [firstUnit, firstLessons] = groups[0];
+  assert.strictEqual(firstUnit, "Learn the Keys 1");
+  assert.strictEqual(firstLessons[0], "Learn the Keys 1: 1. J, F, and Space");
+  assert.strictEqual(firstLessons[1], "Learn the Keys 1: 2. U, R, and K Keys");
+  assert.strictEqual(firstLessons.length, CURRICULUM["Learn the Keys 1"].length);
+});
+
+test("curriculumLessonGroups orders units per UNIT_ORDER, not alphabetically", () => {
+  const groups = curriculumLessonGroups([]);
+  const unitNames = groups.map(([unit]) => unit);
+  const keysIdx = unitNames.indexOf("Learn the Keys 1");
+  const crossIdx = unitNames.indexOf("Cross Curricular 1");
+  assert.ok(keysIdx < crossIdx, "Learn the Keys 1 should come before Cross Curricular 1");
+});
+
+test("curriculumLessonGroups adds plan lessons CURRICULUM doesn't cover (safety net)", () => {
+  const plan = [{ unit: "Learn the Keys 1", lesson: "Learn the Keys 1: 99. A New Lesson" }];
+  const groups = curriculumLessonGroups(plan);
+  const [, lessons] = groups.find(([unit]) => unit === "Learn the Keys 1");
+  assert.ok(lessons.includes("Learn the Keys 1: 99. A New Lesson"));
+});
+
+test("curriculumLessonGroups adds a brand-new unit from the plan too", () => {
+  const plan = [{ unit: "Brand New Unit", lesson: "Brand New Unit: 1. Something" }];
+  const groups = curriculumLessonGroups(plan);
+  const unitNames = groups.map(([unit]) => unit);
+  assert.ok(unitNames.includes("Brand New Unit"));
+  // Not in UNIT_ORDER, so it should sort after all known units.
+  assert.strictEqual(unitNames[unitNames.length - 1], "Brand New Unit");
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
