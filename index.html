@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GCType — Typing.com Auto-Grader</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+</head>
+<body>
+  <header>
+    <h1>GCType</h1>
+    <p class="subtitle">Typing.com → Google Classroom auto-grader</p>
+    <button id="signin-btn">Sign in with Google</button>
+    <span id="auth-status"></span>
+  </header>
+
+  <main>
+    <!-- Step 1: Upload -->
+    <section id="view-upload" class="view">
+      <h2>1. Upload Typing.com CSV export</h2>
+      <input type="file" id="csv-input" accept=".csv">
+    </section>
+
+    <!-- Step 2: Preview -->
+    <section id="view-preview" class="view" hidden>
+      <h2>2. Preview & confirm grades</h2>
+      <div id="preview-table-container"></div>
+      <button id="submit-btn">Submit selected grades</button>
+    </section>
+
+    <!-- Step 3: Result -->
+    <section id="view-result" class="view" hidden>
+      <h2>3. Done</h2>
+      <div id="result-summary"></div>
+    </section>
+
+    <!-- Assignment auto-creation picker (used before grading if assignment doesn't exist yet) -->
+    <section id="view-create-assignment" class="view" hidden>
+      <h2>Create assignment</h2>
+      <label>Class <select id="create-class"></select></label>
+      <label>Lesson <select id="create-lesson"></select></label>
+      <label>Points <input type="number" id="create-points" value="100"></label>
+      <label>Due date <input type="date" id="create-due"></label>
+      <button id="create-assignment-btn">Create in Classroom</button>
+    </section>
+  </main>
+
+  <script src="js/curriculum.js"></script>
+  <script src="js/csvParser.js"></script>
+  <script src="js/matcher.js"></script>
+  <script src="js/auth.js"></script>
+  <script src="js/classroomClient.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
