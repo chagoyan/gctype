@@ -39,9 +39,10 @@
 
       <h2 class="section-title">Create Assignments</h2>
       <div class="filters">
-        <label>Class:
-          <select id="ahead-class"></select>
-        </label>
+        <div class="class-picker">
+          <span class="class-picker-label">Class(es):</span>
+          <div id="ahead-class-list" class="checkbox-list"></div>
+        </div>
         <label>Lesson:
           <select id="ahead-lesson"></select>
         </label>
@@ -52,7 +53,7 @@
           <input type="date" id="ahead-due-date">
         </label>
         <label>
-          <input type="checkbox" id="ahead-draft">
+          <input type="checkbox" id="ahead-draft" checked>
           Save as draft
         </label>
         <button id="create-assignment-btn" type="button">Create assignment</button>

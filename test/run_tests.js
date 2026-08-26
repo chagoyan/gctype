@@ -10,7 +10,7 @@ const path = require("path");
 const assert = require("assert");
 
 const { parseTypingCsv, groupByClassAndLesson } = require("../js/csvParser.js");
-const { computeGrade, matchStudent, normalizeName } = require("../js/matcher.js");
+const { computeGrade, isDueDateReached, matchStudent, normalizeName } = require("../js/matcher.js");
 const {
   CURRICULUM,
   unitName,
@@ -89,6 +89,31 @@ test("progress == 100% but not turned in earns 80% of points", () => {
 
 test("turnedIn defaults to true when omitted", () => {
   assert.strictEqual(computeGrade(100, 100), 100);
+});
+
+console.log("\nmatcher.js due date gating");
+
+test("no due date at all counts as always reached", () => {
+  assert.strictEqual(isDueDateReached(null), true);
+  assert.strictEqual(isDueDateReached(undefined), true);
+});
+
+test("due date not reached before 11:59 PM on the due day", () => {
+  const dueDate = { year: 2026, month: 8, day: 25 };
+  const beforeCutoff = new Date(2026, 7, 25, 15, 0);
+  assert.strictEqual(isDueDateReached(dueDate, beforeCutoff), false);
+});
+
+test("due date reached just after 11:59 PM on the due day", () => {
+  const dueDate = { year: 2026, month: 8, day: 25 };
+  const afterCutoff = new Date(2026, 7, 26, 0, 0, 1);
+  assert.strictEqual(isDueDateReached(dueDate, afterCutoff), true);
+});
+
+test("due date not reached on days before it", () => {
+  const dueDate = { year: 2026, month: 8, day: 25 };
+  const dayBefore = new Date(2026, 7, 24, 23, 59, 59);
+  assert.strictEqual(isDueDateReached(dueDate, dayBefore), false);
 });
 
 console.log("\nmatcher.js name matching");

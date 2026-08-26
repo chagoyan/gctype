@@ -30,6 +30,23 @@ function computeGrade(progressPct, maxPoints, turnedIn = true) {
   return Math.round(maxPoints * NOT_TURNED_IN_FACTOR);
 }
 
+/**
+ * Whether a Classroom assignment's due date has fully elapsed as of `now`.
+ * No due date at all (`dueDate` undefined/null) counts as always reached --
+ * there's nothing to wait for. The cutoff is the end of the due date
+ * (23:59:59.999 local time) regardless of whatever dueTime Classroom has
+ * stored, matching how this tool always creates assignments with a fixed
+ * 11:59 PM dueTime -- see classroomClient.js createCoursework.
+ *
+ * `dueDate` is the Classroom API shape: { year, month, day } (month is
+ * 1-indexed, per the API, unlike JS Date).
+ */
+function isDueDateReached(dueDate, now = new Date()) {
+  if (!dueDate) return true;
+  const cutoff = new Date(dueDate.year, dueDate.month - 1, dueDate.day, 23, 59, 59, 999);
+  return now.getTime() > cutoff.getTime();
+}
+
 function normalizeName(s) {
   return (s || "")
     .trim()
@@ -68,5 +85,12 @@ function matchStudent(firstName, lastName, roster) {
 // Node-only export for the standalone unit tests in test/. Harmless no-op
 // in the browser (module is undefined there).
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { NOT_TURNED_IN_FACTOR, fullCredit, computeGrade, normalizeName, matchStudent };
+  module.exports = {
+    NOT_TURNED_IN_FACTOR,
+    fullCredit,
+    computeGrade,
+    isDueDateReached,
+    normalizeName,
+    matchStudent,
+  };
 }

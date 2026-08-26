@@ -120,7 +120,21 @@ async function buildPlan(csvText) {
           const turnedIn = submission.state === "TURNED_IN" || submission.state === "RETURNED";
           studentEntry.submissionId = submission.id;
           studentEntry.turnedIn = turnedIn;
-          studentEntry.grade = computeGrade(row.progressPct, maxPoints, turnedIn);
+
+          // Submitted + 100% complete grades immediately, due date or not.
+          // Anything short of that (not turned in, or turned in but under
+          // 100%) is held back -- not graded as 0 or 80% -- until the
+          // assignment's due date has passed, so a student mid-lesson isn't
+          // marked down for work that isn't due yet. See "resubmitted"
+          // discussion in project memory: grading a submission before it's
+          // turned in is also what caused Classroom to show it as
+          // "resubmitted" once the student did turn it in.
+          const fullyDone = turnedIn && fullCredit(row.progressPct);
+          if (fullyDone || isDueDateReached(entry.coursework.dueDate)) {
+            studentEntry.grade = computeGrade(row.progressPct, maxPoints, turnedIn);
+          } else {
+            studentEntry.status = "not_yet_due";
+          }
         }
       }
       entry.students.push(studentEntry);
@@ -141,6 +155,7 @@ const STATUS_LABELS = {
   no_submission: "Matched, but no submission record found — needs manual grading",
   ambiguous: "Ambiguous name match on roster — needs manual grading",
   not_found: "Not found on roster — needs manual grading",
+  not_yet_due: "Not yet due — waiting to grade incomplete/not-turned-in work",
 };
 
 // ---------------------------------------------------------------------
@@ -148,9 +163,21 @@ const STATUS_LABELS = {
 // assignment form + typing-grader/app.py's create_assignment route)
 // ---------------------------------------------------------------------
 
+/**
+ * Which classes were checked before this (re)population, so a rebuild
+ * (e.g. after creating an assignment re-matches the CSV) doesn't lose the
+ * teacher's selection -- same "sticky" intent as the old single-select's
+ * `previous` handling.
+ */
+function checkedAheadClasses() {
+  return Array.from(document.querySelectorAll('#ahead-class-list input[type="checkbox"]:checked')).map(
+    (cb) => cb.value
+  );
+}
+
 async function populateAheadClassPicker() {
-  const select = document.getElementById("ahead-class");
-  const previous = select.value;
+  const list = document.getElementById("ahead-class-list");
+  const previouslyChecked = new Set(checkedAheadClasses());
   let courses;
   try {
     courses = await classroomClient.listActiveCourses();
@@ -161,15 +188,16 @@ async function populateAheadClassPicker() {
   const names = [...new Set(courses.map((c) => c.name || ""))].sort((a, b) =>
     comparePeriodKeys(periodSortKey(a), periodSortKey(b))
   );
-  select.innerHTML = "";
+  list.innerHTML = "";
   for (const name of names) {
-    const opt = document.createElement("option");
-    opt.value = name;
-    opt.textContent = name;
-    select.appendChild(opt);
-  }
-  if (Array.from(select.options).some((o) => o.value === previous)) {
-    select.value = previous;
+    const label = document.createElement("label");
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.value = name;
+    cb.checked = previouslyChecked.has(name);
+    label.appendChild(cb);
+    label.appendChild(document.createTextNode(name));
+    list.appendChild(label);
   }
 }
 
@@ -195,9 +223,41 @@ function populateAheadLessonPicker() {
   }
 }
 
+/** Create the assignment in one class; throws on failure, returns a status string on success/skip. */
+async function createAssignmentInClass(className, { lesson, maxPoints, dueDateRaw, dueDate, asDraft }) {
+  const course = await classroomClient.findCourseByName(className);
+  if (!course) {
+    return { ok: false, message: `No active Classroom course named "${className}" found.` };
+  }
+
+  // Refuse to create a second assignment with the same title in the same
+  // course -- avoids duplicate-titled assignments that would make
+  // grading's exact-title match ambiguous later.
+  const existing = await classroomClient.findCourseworkByTitle(course.id, lesson);
+  if (existing) {
+    return {
+      ok: false,
+      message: `An assignment titled "${lesson}" already exists in ${className} — nothing created.`,
+    };
+  }
+
+  const topic = await classroomClient.getOrCreateTopic(course.id, PENDING_TOPIC_NAME);
+  await classroomClient.createCoursework(course.id, {
+    title: lesson,
+    description: buildAssignmentDescription(lesson),
+    maxPoints,
+    topicId: topic.topicId,
+    dueDate,
+    asDraft,
+  });
+
+  const dueNote = dueDateRaw ? `, due ${dueDateRaw}` : "";
+  const draftNote = asDraft ? " as a draft" : "";
+  return { ok: true, message: `Created "${lesson}" in ${className}${draftNote} (${maxPoints} pts${dueNote}).` };
+}
+
 async function createAssignmentFromPicker() {
-  const classSelect = document.getElementById("ahead-class");
-  const className = classSelect.value;
+  const classNames = checkedAheadClasses();
   const lesson = document.getElementById("ahead-lesson").value;
   const pointsRaw = document.getElementById("ahead-points").value.trim();
   const maxPoints = pointsRaw ? parseInt(pointsRaw, 10) || DEFAULT_MAX_POINTS : DEFAULT_MAX_POINTS;
@@ -209,42 +269,32 @@ async function createAssignmentFromPicker() {
   const asDraft = document.getElementById("ahead-draft").checked;
 
   clearFlash();
-  if (!className || !lesson) {
-    flash("Missing class or lesson for assignment creation.");
+  if (classNames.length === 0 || !lesson) {
+    flash("Missing class(es) or lesson for assignment creation.");
     return;
   }
 
   const btn = document.getElementById("create-assignment-btn");
   btn.disabled = true;
   try {
-    const course = await classroomClient.findCourseByName(className);
-    if (!course) {
-      flash(`No active Classroom course named "${className}" found.`);
-      return;
+    // Created one class at a time (not in parallel) so one class's failure
+    // (e.g. a duplicate title) doesn't race with or obscure another's, and
+    // so flash messages come back in the same order the classes are listed.
+    for (const className of classNames) {
+      try {
+        const result = await createAssignmentInClass(className, {
+          lesson,
+          maxPoints,
+          dueDateRaw,
+          dueDate,
+          asDraft,
+        });
+        flash(result.message);
+      } catch (err) {
+        console.error(err);
+        flash(`Failed to create "${lesson}" in ${className}: ${err.message}`);
+      }
     }
-
-    // Refuse to create a second assignment with the same title in the same
-    // course -- avoids duplicate-titled assignments that would make
-    // grading's exact-title match ambiguous later.
-    const existing = await classroomClient.findCourseworkByTitle(course.id, lesson);
-    if (existing) {
-      flash(`An assignment titled "${lesson}" already exists in ${className} — nothing created.`);
-      return;
-    }
-
-    const topic = await classroomClient.getOrCreateTopic(course.id, PENDING_TOPIC_NAME);
-    await classroomClient.createCoursework(course.id, {
-      title: lesson,
-      description: buildAssignmentDescription(lesson),
-      maxPoints,
-      topicId: topic.topicId,
-      dueDate,
-      asDraft,
-    });
-
-    const dueNote = dueDateRaw ? `, due ${dueDateRaw}` : "";
-    const draftNote = asDraft ? " as a draft" : "";
-    flash(`Created "${lesson}" in Classroom${draftNote} (${maxPoints} pts${dueNote}).`);
 
     // Re-match the CSV against Classroom in case this unblocks any grading
     // rows that were waiting on this assignment to exist.
@@ -252,12 +302,10 @@ async function createAssignmentFromPicker() {
       currentPlan = await buildPlan(currentCsvText);
       renderPreview();
       // Keep the class selection sticky so creating several lessons in a
-      // row for one period doesn't require reselecting it every time.
-      classSelect.value = className;
+      // row for the same period(s) doesn't require reselecting them every
+      // time -- populateAheadClassPicker (called from renderPreview) reads
+      // the checkboxes before clearing them, so this is a no-op re-check.
     }
-  } catch (err) {
-    console.error(err);
-    flash(`Failed to create "${lesson}": ${err.message}`);
   } finally {
     btn.disabled = false;
   }
