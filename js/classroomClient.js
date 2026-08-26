@@ -144,7 +144,10 @@ class ClassroomClient {
   }
 
   /**
-   * Create a new PUBLISHED assignment in the given course.
+   * Create a new assignment in the given course, PUBLISHED by default or
+   * DRAFT if `asDraft` is set (shows as a draft in Classroom, same as one
+   * started by hand and not posted -- the teacher posts it later from
+   * Classroom's own UI).
    *
    * Because this app's own OAuth client creates the coursework, it (unlike
    * coursework created by hand in the Classroom UI) can later be graded
@@ -157,13 +160,13 @@ class ClassroomClient {
    * so a fixed 11:59 PM dueTime is always sent alongside it -- Classroom's
    * own UI then shows just the date, matching manually-created assignments.
    */
-  async createCoursework(courseId, { title, description, maxPoints, topicId, dueDate }) {
+  async createCoursework(courseId, { title, description, maxPoints, topicId, dueDate, asDraft }) {
     const body = {
       title,
       description,
       workType: "ASSIGNMENT",
       maxPoints,
-      state: "PUBLISHED",
+      state: asDraft ? "DRAFT" : "PUBLISHED",
     };
     if (dueDate) {
       body.dueDate = {

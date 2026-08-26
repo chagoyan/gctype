@@ -206,6 +206,7 @@ async function createAssignmentFromPicker() {
   // typed regardless of timezone (a bare "new Date('YYYY-MM-DD')" parses
   // as UTC and can display a day off in the evening in US timezones).
   const dueDate = dueDateRaw ? new Date(`${dueDateRaw}T00:00:00`) : null;
+  const asDraft = document.getElementById("ahead-draft").checked;
 
   clearFlash();
   if (!className || !lesson) {
@@ -238,10 +239,12 @@ async function createAssignmentFromPicker() {
       maxPoints,
       topicId: topic.topicId,
       dueDate,
+      asDraft,
     });
 
     const dueNote = dueDateRaw ? `, due ${dueDateRaw}` : "";
-    flash(`Created "${lesson}" in Classroom (${maxPoints} pts${dueNote}).`);
+    const draftNote = asDraft ? " as a draft" : "";
+    flash(`Created "${lesson}" in Classroom${draftNote} (${maxPoints} pts${dueNote}).`);
 
     // Re-match the CSV against Classroom in case this unblocks any grading
     // rows that were waiting on this assignment to exist.
