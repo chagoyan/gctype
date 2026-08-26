@@ -52,7 +52,15 @@ function clearFlash() {
  * Flask version.
  */
 async function buildPlan(csvText) {
-  const rows = parseTypingCsv(csvText);
+  // Canonicalize each row's lesson number against CURRICULUM before
+  // grouping -- Typing.com has renumbered lessons as it restructured units
+  // over time, so exported data can carry a stale number for a lesson that
+  // still exists (see canonicalizeLesson), and grouping/matching both key
+  // on the exact lesson string.
+  const rows = parseTypingCsv(csvText).map((row) => ({
+    ...row,
+    lesson: canonicalizeLesson(row.lesson),
+  }));
   const groups = groupByClassAndLesson(rows);
 
   const sortedGroups = [...groups.values()].sort((a, b) => {

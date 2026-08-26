@@ -17,6 +17,7 @@ const {
   naturalSort,
   periodSortKey,
   comparePeriodKeys,
+  canonicalizeLesson,
   curriculumLessonGroups,
 } = require("../js/curriculum.js");
 const { buildAssignmentDescription } = require("../js/assignmentTemplate.js");
@@ -214,6 +215,40 @@ test("curriculumLessonGroups adds a brand-new unit from the plan too", () => {
   assert.ok(unitNames.includes("Brand New Unit"));
   // Not in UNIT_ORDER, so it should sort after all known units.
   assert.strictEqual(unitNames[unitNames.length - 1], "Brand New Unit");
+});
+
+test("canonicalizeLesson rewrites a known title's number to CURRICULUM's", () => {
+  // Real-world case: "T, S, and L Keys" is canonically #6, but a stale
+  // pre-curriculum-trim export logs it under an old, higher number.
+  assert.strictEqual(
+    canonicalizeLesson("Learn the Keys 1: 7. T, S, and L Keys"),
+    "Learn the Keys 1: 6. T, S, and L Keys"
+  );
+});
+
+test("canonicalizeLesson leaves an already-canonical lesson unchanged", () => {
+  assert.strictEqual(
+    canonicalizeLesson("Learn the Keys 1: 6. T, S, and L Keys"),
+    "Learn the Keys 1: 6. T, S, and L Keys"
+  );
+});
+
+test("canonicalizeLesson leaves an unrecognized unit unchanged", () => {
+  assert.strictEqual(
+    canonicalizeLesson("Not A Real Unit: 1. Something"),
+    "Not A Real Unit: 1. Something"
+  );
+});
+
+test("canonicalizeLesson leaves an unrecognized title within a known unit unchanged", () => {
+  assert.strictEqual(
+    canonicalizeLesson("Learn the Keys 1: 99. A New Lesson"),
+    "Learn the Keys 1: 99. A New Lesson"
+  );
+});
+
+test("canonicalizeLesson leaves a lesson with no ': ' separator unchanged", () => {
+  assert.strictEqual(canonicalizeLesson("Just for Fun"), "Just for Fun");
 });
 
 console.log("\nassignmentTemplate.js");

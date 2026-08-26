@@ -207,6 +207,42 @@ function compareUnitKeys(a, b) {
 }
 
 /**
+ * Rewrite a "<Unit>: <N>. <Title>" lesson string to CURRICULUM's canonical
+ * numbering for that title, if the unit and title (ignoring N) are known.
+ *
+ * Typing.com has renumbered lessons within a unit over time as it
+ * restructured the curriculum (e.g. "Learn the Keys 1" used to have 18
+ * lessons and was trimmed to the current 16 within the last two years), so
+ * a still-existing lesson can show up in exported data under an older
+ * number than CURRICULUM's current one -- e.g. some rows say "Learn the
+ * Keys 1: 7. T, S, and L Keys" (an old number) where CURRICULUM has it
+ * (correctly, per the current curriculum) as "...: 6. T, S, and L Keys".
+ * Left alone, that stale numbering makes the row group separately from
+ * everyone else's (groupByClassAndLesson keys on the exact lesson string)
+ * and fail to match the Classroom assignment created under the canonical
+ * title -- silently leaving that student ungraded. Canonicalizing right after CSV
+ * parsing (see buildPlan in app.js) fixes both that and the look-alike
+ * duplicate entries this same mismatch caused in the "Create Assignments"
+ * lesson dropdown.
+ *
+ * Falls back to the original string unchanged if the unit isn't in
+ * CURRICULUM, or the title (once the leading "N. " is stripped) isn't
+ * found in that unit's list -- i.e. a genuinely new/unrecognized lesson,
+ * which the dropdown's safety net should still pick up as-is.
+ */
+function canonicalizeLesson(lesson) {
+  const idx = lesson.indexOf(": ");
+  if (idx === -1) return lesson;
+  const unit = lesson.slice(0, idx).trim();
+  const titles = CURRICULUM[unit];
+  if (!titles) return lesson;
+  const title = lesson.slice(idx + 2).replace(/^\d+\.\s*/, "");
+  const i = titles.indexOf(title);
+  if (i === -1) return lesson;
+  return `${unit}: ${i + 1}. ${title}`;
+}
+
+/**
  * (unit, [full lesson title, ...]) pairs, in curriculum order, for the
  * "Create an assignment ahead of time" dropdown.
  *
@@ -267,6 +303,7 @@ if (typeof module !== "undefined" && module.exports) {
     comparePeriodKeys,
     unitSortKey,
     compareUnitKeys,
+    canonicalizeLesson,
     curriculumLessonGroups,
   };
 }
