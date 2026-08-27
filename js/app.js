@@ -6,7 +6,15 @@
 
 let classroomClient = null; // instantiated once auth is ready
 let currentPlan = []; // array of group entries, see buildPlan() below
-let currentCsvText = null; // raw CSV text, kept so "Create assignment" can rebuild the plan
+let currentCsvText = null; // raw CSV text, kept so re-picking a class can rebuild the plan
+let currentGradeClass = null; // className the current plan/preview is scoped to
+
+// Which Grade sub-view to return to when the "Grade" nav tab is clicked --
+// grading is now a multi-step flow (upload -> pick class -> preview ->
+// results), so the tab should resume wherever the teacher left off instead
+// of always restarting at upload.
+const GRADE_VIEWS = new Set(["grade-upload", "grade-class-pick", "grade-preview", "results"]);
+let gradeSubView = "grade-upload";
 
 // Points assigned to an assignment the tool creates itself. Matches the
 // point value already used on the manually-created Learn the Keys / Cross
@@ -25,6 +33,11 @@ function showView(name) {
   for (const el of document.querySelectorAll(".view")) {
     el.hidden = el.id !== `view-${name}`;
   }
+  if (GRADE_VIEWS.has(name)) gradeSubView = name;
+  const activeTab = GRADE_VIEWS.has(name) ? "grade" : "create";
+  for (const btn of document.querySelectorAll(".nav-btn")) {
+    btn.classList.toggle("active", btn.dataset.nav === activeTab);
+  }
 }
 
 function flash(message) {
@@ -38,20 +51,48 @@ function clearFlash() {
   document.getElementById("flash").innerHTML = "";
 }
 
+/** Show a status line during a multi-step async operation (fetch/submit loops). */
+function updateProgress(el, text) {
+  el.hidden = false;
+  el.textContent = text;
+}
+
+function hideProgress(el) {
+  el.hidden = true;
+  el.textContent = "";
+}
+
 // ---------------------------------------------------------------------
 // build_plan port (typing-grader/app.py build_plan)
 // ---------------------------------------------------------------------
 
 /**
- * Parse a CSV and match every (class, lesson) group against Classroom,
- * producing a full preview: which course/assignment matched, and for each
- * student in that group, their match status and computed grade.
- *
- * Deliberately *not* cross-producted to every (class, lesson) combo --
- * only the real combos actually in the CSV get looked up, same as the
- * Flask version.
+ * Distinct class names present in a CSV, in period order -- read entirely
+ * client-side (no Classroom API calls) so the teacher can pick which one
+ * class to grade before anything is fetched.
  */
-async function buildPlan(csvText) {
+function distinctClassNames(csvText) {
+  const rows = parseTypingCsv(csvText);
+  const names = [...new Set(rows.map((r) => r.className))];
+  names.sort((a, b) => comparePeriodKeys(periodSortKey(a), periodSortKey(b)));
+  return names;
+}
+
+/**
+ * Parse a CSV and match every lesson group *for one class* against
+ * Classroom, producing a full preview: which assignment matched, and for
+ * each student in that group, their match status and computed grade.
+ *
+ * Scoped to a single class (selectedClassName) rather than every class in
+ * the CSV -- grading used to build a plan across every class x lesson combo
+ * in one pass, which could fire well over Classroom's per-minute request
+ * quota on a CSV covering several periods. Picking one class first keeps
+ * each run small and predictable.
+ *
+ * onProgress(current, total, lesson), if given, is called before each
+ * group's Classroom lookups so the caller can show live progress.
+ */
+async function buildPlan(csvText, selectedClassName, onProgress) {
   // Canonicalize each row's lesson number against CURRICULUM before
   // grouping -- Typing.com has renumbered lessons as it restructured units
   // over time, so exported data can carry a stale number for a lesson that
@@ -63,17 +104,21 @@ async function buildPlan(csvText) {
   }));
   const groups = groupByClassAndLesson(rows);
 
-  const sortedGroups = [...groups.values()].sort((a, b) => {
-    const byPeriod = comparePeriodKeys(periodSortKey(a.className), periodSortKey(b.className));
-    if (byPeriod !== 0) return byPeriod;
-    const byUnit = compareUnitKeys(unitSortKey(unitName(a.lesson)), unitSortKey(unitName(b.lesson)));
-    if (byUnit !== 0) return byUnit;
-    return compareNaturalKeys(naturalSortKey(a.lesson), naturalSortKey(b.lesson));
-  });
+  const sortedGroups = [...groups.values()]
+    .filter((g) => g.className === selectedClassName)
+    .sort((a, b) => {
+      const byUnit = compareUnitKeys(unitSortKey(unitName(a.lesson)), unitSortKey(unitName(b.lesson)));
+      if (byUnit !== 0) return byUnit;
+      return compareNaturalKeys(naturalSortKey(a.lesson), naturalSortKey(b.lesson));
+    });
 
   const plan = [];
+  let done = 0;
 
   for (const group of sortedGroups) {
+    done++;
+    if (onProgress) onProgress(done, sortedGroups.length, group.lesson);
+
     const entry = {
       className: group.className,
       lesson: group.lesson,
@@ -283,12 +328,16 @@ async function createAssignmentFromPicker() {
   }
 
   const btn = document.getElementById("create-assignment-btn");
+  const progressEl = document.getElementById("create-progress");
   btn.disabled = true;
   try {
     // Created one class at a time (not in parallel) so one class's failure
     // (e.g. a duplicate title) doesn't race with or obscure another's, and
     // so flash messages come back in the same order the classes are listed.
+    let done = 0;
     for (const className of classNames) {
+      done++;
+      updateProgress(progressEl, `Creating "${lesson}" in ${className}… (${done} of ${classNames.length})`);
       try {
         const result = await createAssignmentInClass(className, {
           lesson,
@@ -303,19 +352,56 @@ async function createAssignmentFromPicker() {
         flash(`Failed to create "${lesson}" in ${className}: ${err.message}`);
       }
     }
+  } finally {
+    hideProgress(progressEl);
+    btn.disabled = false;
+  }
+}
 
-    // Re-match the CSV against Classroom in case this unblocks any grading
-    // rows that were waiting on this assignment to exist.
-    if (currentCsvText) {
-      currentPlan = await buildPlan(currentCsvText);
-      renderPreview();
-      // Keep the class selection sticky so creating several lessons in a
-      // row for the same period(s) doesn't require reselecting them every
-      // time -- populateAheadClassPicker (called from renderPreview) reads
-      // the checkboxes before clearing them, so this is a no-op re-check.
-    }
+// ---------------------------------------------------------------------
+// Grade -- step 2, class picker (typing-grader/app.py had no equivalent --
+// the Flask version's single request budget never needed this)
+// ---------------------------------------------------------------------
+
+function populateGradeClassPicker(classNames) {
+  const select = document.getElementById("grade-class-select");
+  select.innerHTML = "";
+  for (const name of classNames) {
+    const opt = document.createElement("option");
+    opt.value = name;
+    opt.textContent = name;
+    select.appendChild(opt);
+  }
+  if (currentGradeClass && classNames.includes(currentGradeClass)) {
+    select.value = currentGradeClass;
+  }
+}
+
+async function loadGradeClass() {
+  const select = document.getElementById("grade-class-select");
+  const className = select.value;
+  if (!className) return;
+
+  const btn = document.getElementById("grade-load-class-btn");
+  const progressEl = document.getElementById("grade-class-progress");
+  clearFlash();
+  btn.disabled = true;
+  select.disabled = true;
+
+  try {
+    currentGradeClass = className;
+    currentPlan = await buildPlan(currentCsvText, className, (done, total, lesson) => {
+      updateProgress(progressEl, `Fetching "${lesson}" from Classroom… (${done} of ${total})`);
+    });
+    hideProgress(progressEl);
+    renderPreview();
+  } catch (err) {
+    console.error(err);
+    hideProgress(progressEl);
+    flash(`Couldn't build a grading plan for ${className}: ${err.message}`);
   } finally {
     btn.disabled = false;
+    select.disabled = false;
   }
 }
 
@@ -323,13 +409,11 @@ function renderPreview() {
   const container = document.getElementById("groups-container");
   container.innerHTML = "";
 
-  populateAheadLessonPicker();
-  populateAheadClassPicker();
+  document.getElementById("grade-preview-class").textContent = currentGradeClass;
 
   currentPlan.forEach((entry, entryIdx) => {
     const section = document.createElement("section");
     section.className = "group";
-    section.dataset.class = entry.className;
     section.dataset.unit = entry.unit;
     section.dataset.lesson = entry.lesson;
 
@@ -416,15 +500,15 @@ function renderPreview() {
   });
 
   setupFilters();
-  showView("preview");
+  showView("grade-preview");
 }
 
 // ---------------------------------------------------------------------
-// Class / Unit / Lesson filters (ported from preview.html's inline script)
+// Unit / Lesson filters (ported from preview.html's inline script; the
+// class dimension moved to a fetch-time picker, see loadGradeClass)
 // ---------------------------------------------------------------------
 
 function setupFilters() {
-  const classSelect = document.getElementById("filter-class");
   const unitSelect = document.getElementById("filter-unit");
   const lessonSelect = document.getElementById("filter-lesson");
   const sections = Array.from(document.querySelectorAll("#groups-container .group"));
@@ -459,60 +543,33 @@ function setupFilters() {
     select.value = stillValid ? previous : "";
   }
 
-  function populateUnits() {
-    const cls = classSelect.value;
-    fillSelect(
-      unitSelect,
-      uniqueValues("unit", (s) => cls === "" || s.dataset.class === cls),
-      "All units"
-    );
-  }
-
   function populateLessons() {
-    const cls = classSelect.value;
     const unit = unitSelect.value;
     fillSelect(
       lessonSelect,
-      uniqueValues(
-        "lesson",
-        (s) => (cls === "" || s.dataset.class === cls) && (unit === "" || s.dataset.unit === unit)
-      ),
+      uniqueValues("lesson", (s) => unit === "" || s.dataset.unit === unit),
       "All lessons"
     );
   }
 
   function applyFilter() {
-    const cls = classSelect.value;
     const unit = unitSelect.value;
     const lesson = lessonSelect.value;
     for (const s of sections) {
-      const match =
-        (cls === "" || s.dataset.class === cls) &&
-        (unit === "" || s.dataset.unit === unit) &&
-        (lesson === "" || s.dataset.lesson === lesson);
+      const match = (unit === "" || s.dataset.unit === unit) && (lesson === "" || s.dataset.lesson === lesson);
       s.style.display = match ? "" : "none";
     }
   }
 
-  fillSelect(
-    classSelect,
-    uniqueValues("class", () => true),
-    "All classes"
-  );
-  classSelect.value = "";
+  fillSelect(unitSelect, uniqueValues("unit", () => true), "All units");
+  unitSelect.value = "";
 
-  classSelect.onchange = () => {
-    populateUnits();
-    populateLessons();
-    applyFilter();
-  };
   unitSelect.onchange = () => {
     populateLessons();
     applyFilter();
   };
   lessonSelect.onchange = applyFilter;
 
-  populateUnits();
   populateLessons();
   applyFilter();
 }
@@ -522,35 +579,58 @@ function setupFilters() {
 // ---------------------------------------------------------------------
 
 async function submitCheckedGrades() {
+  // Only rows currently visible under the Unit/Lesson filter get submitted
+  // -- a checkbox left checked inside a filtered-out group (style.display
+  // "none", set by applyFilter above) is not included, so switching the
+  // filter view narrows what "Submit" actually sends.
   const checkboxes = Array.from(
     document.querySelectorAll('#groups-container input[type="checkbox"]:checked')
-  );
+  ).filter((cb) => {
+    const group = cb.closest(".group");
+    return group && group.style.display !== "none";
+  });
+
+  const btn = document.getElementById("submit-btn");
+  const progressEl = document.getElementById("submit-progress");
+  btn.disabled = true;
 
   const results = [];
-  for (const cb of checkboxes) {
-    const entry = currentPlan[Number(cb.dataset.entryIdx)];
-    const student = entry.students[Number(cb.dataset.studentIdx)];
-    if (!entry.course || !entry.coursework) continue;
-    if (student.status !== "matched" || !student.submissionId) continue;
+  let done = 0;
+  try {
+    for (const cb of checkboxes) {
+      const entry = currentPlan[Number(cb.dataset.entryIdx)];
+      const student = entry.students[Number(cb.dataset.studentIdx)];
+      if (!entry.course || !entry.coursework) continue;
+      if (student.status !== "matched" || !student.submissionId) continue;
 
-    try {
-      await classroomClient.patchGrade(entry.course.id, entry.coursework.id, student.submissionId, student.grade);
-      results.push({
-        name: `${student.firstName} ${student.lastName}`,
-        lesson: entry.lesson,
-        grade: student.grade,
-        ok: true,
-        error: null,
-      });
-    } catch (err) {
-      results.push({
-        name: `${student.firstName} ${student.lastName}`,
-        lesson: entry.lesson,
-        grade: student.grade,
-        ok: false,
-        error: err.message,
-      });
+      done++;
+      updateProgress(
+        progressEl,
+        `Grading ${student.firstName} ${student.lastName} — ${entry.lesson}… (${done} of ${checkboxes.length})`
+      );
+
+      try {
+        await classroomClient.patchGrade(entry.course.id, entry.coursework.id, student.submissionId, student.grade);
+        results.push({
+          name: `${student.firstName} ${student.lastName}`,
+          lesson: entry.lesson,
+          grade: student.grade,
+          ok: true,
+          error: null,
+        });
+      } catch (err) {
+        results.push({
+          name: `${student.firstName} ${student.lastName}`,
+          lesson: entry.lesson,
+          grade: student.grade,
+          ok: false,
+          error: err.message,
+        });
+      }
     }
+  } finally {
+    hideProgress(progressEl);
+    btn.disabled = false;
   }
 
   currentPlan = [];
@@ -601,15 +681,26 @@ document.addEventListener("DOMContentLoaded", () => {
     signinBtn.textContent = "Sign in with Google";
   }
 
-  initAuth(
-    (token) => renderSignedIn(),
-    (err) => {
-      renderSignedOut();
-      if (err && err.type && err.type !== "popup_closed") {
-        console.warn("Google auth error:", err);
+  // initAuth() depends on the Google Identity Services script (loaded async
+  // from accounts.google.com in index.html's <head>); a slow network or a
+  // blocked request means `google` isn't defined yet and this throws. Catch
+  // it here so the rest of this handler -- all the button/nav wiring below
+  // -- still runs and the page stays usable (sign-in just won't work until
+  // reloaded with the script available).
+  try {
+    initAuth(
+      (token) => renderSignedIn(),
+      (err) => {
+        renderSignedOut();
+        if (err && err.type && err.type !== "popup_closed") {
+          console.warn("Google auth error:", err);
+        }
       }
-    }
-  );
+    );
+  } catch (err) {
+    console.error("Couldn't initialize Google sign-in:", err);
+    flash("Couldn't load Google sign-in. Check your connection and reload the page.");
+  }
 
   signinBtn.addEventListener("click", signIn);
 
@@ -625,14 +716,19 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     const reader = new FileReader();
-    reader.onload = async () => {
+    reader.onload = () => {
       try {
         currentCsvText = reader.result;
-        currentPlan = await buildPlan(currentCsvText);
-        renderPreview();
+        const classNames = distinctClassNames(currentCsvText);
+        if (classNames.length === 0) {
+          flash("No usable rows found in that CSV (need First Name, Last Name, Class, and Lesson columns).");
+          return;
+        }
+        populateGradeClassPicker(classNames);
+        showView("grade-class-pick");
       } catch (err) {
         console.error(err);
-        flash(`Couldn't build a grading plan: ${err.message}`);
+        flash(`Couldn't read that CSV: ${err.message}`);
       } finally {
         e.target.value = "";
       }
@@ -640,18 +736,55 @@ document.addEventListener("DOMContentLoaded", () => {
     reader.readAsText(file);
   });
 
+  document.getElementById("grade-load-class-btn").addEventListener("click", loadGradeClass);
   document.getElementById("submit-btn").addEventListener("click", submitCheckedGrades);
   document.getElementById("create-assignment-btn").addEventListener("click", createAssignmentFromPicker);
+
+  // Nav tabs: "Create Assignments" doesn't depend on a CSV, so it can be
+  // reached directly; "Grade" resumes wherever the multi-step flow was left.
+  for (const btn of document.querySelectorAll(".nav-btn")) {
+    btn.addEventListener("click", () => {
+      clearFlash();
+      if (btn.dataset.nav === "create") {
+        populateAheadClassPicker();
+        populateAheadLessonPicker();
+        showView("create");
+      } else {
+        showView(gradeSubView);
+      }
+    });
+  }
+
+  document.getElementById("grade-back-to-upload-btn").addEventListener("click", () => {
+    currentCsvText = null;
+    currentGradeClass = null;
+    currentPlan = [];
+    clearFlash();
+    showView("grade-upload");
+  });
+
+  document.getElementById("change-class-btn").addEventListener("click", () => {
+    currentPlan = [];
+    clearFlash();
+    populateGradeClassPicker(distinctClassNames(currentCsvText));
+    showView("grade-class-pick");
+  });
 
   document.getElementById("load-another-btn").addEventListener("click", () => {
     currentPlan = [];
     currentCsvText = null;
+    currentGradeClass = null;
     clearFlash();
-    showView("upload");
+    showView("grade-upload");
   });
 
   document.getElementById("grade-another-btn").addEventListener("click", () => {
+    currentPlan = [];
+    currentCsvText = null;
+    currentGradeClass = null;
     clearFlash();
-    showView("upload");
+    showView("grade-upload");
   });
+
+  showView("grade-upload");
 });

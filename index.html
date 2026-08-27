@@ -20,23 +20,16 @@
     </div>
   </header>
 
+  <nav class="main-nav">
+    <button type="button" class="nav-btn" data-nav="create">Create Assignments</button>
+    <button type="button" class="nav-btn active" data-nav="grade">Grade</button>
+  </nav>
+
   <ul id="flash" class="flash"></ul>
 
   <main>
-    <!-- View: Upload -->
-    <section id="view-upload" class="view">
-      <p>Upload a Typing.com "Lesson Details" CSV export. Grading rule: 100%
-        progress + turned in = full points; 100% progress but not turned in =
-        80%; under 100% progress = 0. Typing.com's own Grade/Stars/Accuracy
-        are not used. The CSV is parsed entirely in your browser &mdash; it is
-        never uploaded anywhere.</p>
-      <p><a href="https://teachers.typing.com/reports" target="_blank" rel="noopener">Download the latest CSV report from Typing.com &rarr;</a></p>
-      <input type="file" id="csv-input" accept=".csv">
-    </section>
-
-    <!-- View: Preview -->
-    <section id="view-preview" class="view" hidden>
-
+    <!-- View: Create Assignments -->
+    <section id="view-create" class="view" hidden>
       <h2 class="section-title">Create Assignments</h2>
       <div class="filters">
         <div class="class-picker">
@@ -60,22 +53,56 @@
       </div>
       <p class="muted">
         Lists every active Classroom course and the full Typing.com curriculum
-        &mdash; independent of what's in this CSV &mdash; so you can set up a
-        class's assignment before any student, in any class, has touched
-        that lesson.
+        &mdash; independent of any CSV &mdash; so you can set up a class's
+        assignment before any student, in any class, has touched that lesson.
       </p>
+      <div id="create-progress" class="progress" hidden></div>
+    </section>
 
-      <h2 class="section-title">Update Grades</h2>
+    <!-- View: Grade -- step 1, upload CSV. Visible by default (no `hidden`)
+         so the page still shows something usable even if app.js's own
+         showView() call never runs -- e.g. initAuth() throwing because the
+         Google Identity Services script failed to load. -->
+    <section id="view-grade-upload" class="view">
+      <h2 class="section-title">Grade</h2>
+      <p>Upload a Typing.com "Lesson Details" CSV export. Grading rule: 100%
+        progress + turned in = full points; 100% progress but not turned in =
+        80%; under 100% progress = 0. Typing.com's own Grade/Stars/Accuracy
+        are not used. The CSV is parsed entirely in your browser &mdash; it is
+        never uploaded anywhere.</p>
+      <p><a href="https://teachers.typing.com/reports" target="_blank" rel="noopener">Download the latest CSV report from Typing.com &rarr;</a></p>
+      <input type="file" id="csv-input" accept=".csv">
+    </section>
+
+    <!-- View: Grade -- step 2, pick which class (of those in the CSV) to grade -->
+    <section id="view-grade-class-pick" class="view" hidden>
+      <h2 class="section-title">Grade</h2>
+      <button id="grade-back-to-upload-btn" class="button-link" type="button">&larr; Load a different CSV</button>
+      <p class="muted">
+        Only the class you pick is fetched from Classroom &mdash; grading is
+        scoped to one class at a time to keep requests fast and within
+        Classroom's rate limits.
+      </p>
+      <div class="filters">
+        <label>Class:
+          <select id="grade-class-select"></select>
+        </label>
+        <button id="grade-load-class-btn" type="button">Load</button>
+      </div>
+      <div id="grade-class-progress" class="progress" hidden></div>
+    </section>
+
+    <!-- View: Grade -- step 3, preview and submit grades for the picked class -->
+    <section id="view-grade-preview" class="view" hidden>
+      <h2 class="section-title">Grade &mdash; <span id="grade-preview-class"></span></h2>
       <p class="muted">
         100% progress + turned in = full points. 100% progress but not turned in
         = 80%. Under 100% progress = 0.
       </p>
       <button id="load-another-btn" class="button-link" type="button">Load CSV</button>
+      <button id="change-class-btn" class="button-link" type="button">Change class</button>
 
       <div class="filters">
-        <label>Class:
-          <select id="filter-class"><option value="">All classes</option></select>
-        </label>
         <label>Unit:
           <select id="filter-unit"><option value="">All units</option></select>
         </label>
@@ -86,6 +113,7 @@
 
       <div id="groups-container"></div>
 
+      <div id="submit-progress" class="progress" hidden></div>
       <button id="submit-btn" type="button">Submit checked grades to Classroom</button>
     </section>
 
