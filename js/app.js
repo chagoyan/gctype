@@ -778,7 +778,14 @@ document.addEventListener("DOMContentLoaded", () => {
     showView("grade-upload");
   });
 
-  document.getElementById("grade-another-btn").addEventListener("click", () => {
+  document.getElementById("grade-another-class-btn").addEventListener("click", () => {
+    currentPlan = [];
+    clearFlash();
+    populateGradeClassPicker(distinctClassNames(currentCsvText));
+    showView("grade-class-pick");
+  });
+
+  document.getElementById("grade-another-csv-btn").addEventListener("click", () => {
     currentPlan = [];
     currentCsvText = null;
     currentGradeClass = null;
