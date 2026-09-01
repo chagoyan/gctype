@@ -23,6 +23,7 @@
   <nav class="main-nav">
     <button type="button" class="nav-btn" data-nav="create">Create Assignments</button>
     <button type="button" class="nav-btn active" data-nav="grade">Grade</button>
+    <button type="button" class="nav-btn" data-nav="test">Typing Test</button>
   </nav>
 
   <ul id="flash" class="flash"></ul>
@@ -115,6 +116,29 @@
 
       <div id="submit-progress" class="progress" hidden></div>
       <button id="submit-btn" type="button">Submit checked grades to Classroom</button>
+
+      <section id="remind-section" class="remind-section" hidden>
+        <h2 class="section-title">Remind students who forgot to turn in</h2>
+        <p class="muted">
+          Students below are at 100% progress but haven't turned in their
+          submission yet, so it can't be graded. Google Classroom's API has
+          no way to post a private comment automatically, so this sends a
+          direct email instead, from your own Gmail account. Nothing sends
+          until you click "Send reminders" below.
+        </p>
+        <div class="filters" style="align-items: flex-start;">
+          <label style="flex: 1 1 260px;">Subject:
+            <input type="text" id="remind-subject" style="width: 100%;">
+          </label>
+        </div>
+        <label style="display: block; margin-top: 0.5rem;">Body (use {firstName} and {lessons}):
+          <textarea id="remind-body" rows="6" style="width: 100%; font: inherit;"></textarea>
+        </label>
+        <div id="remind-list-container" style="margin-top: 0.75rem;"></div>
+        <div id="remind-progress" class="progress" hidden></div>
+        <button id="send-reminders-btn" type="button">Send reminders</button>
+        <div id="remind-results-container"></div>
+      </section>
     </section>
 
     <!-- View: Results -->
@@ -124,14 +148,110 @@
       <button id="grade-another-csv-btn" class="button-link" type="button">&larr; Load a different CSV</button>
       <div id="results-container"></div>
     </section>
+
+    <!-- View: Typing Test -- periodic "did they take a 3-minute test"
+         checkpoints, separate from the Lesson-based Grade tab. -->
+    <section id="view-test" class="view" hidden>
+      <h2 class="section-title">Typing Test</h2>
+
+      <h3>Create assignment</h3>
+      <div class="filters">
+        <div class="class-picker">
+          <span class="class-picker-label">Class(es):</span>
+          <div id="test-create-class-list" class="checkbox-list"></div>
+        </div>
+        <label>Number:
+          <input type="text" id="test-create-number" placeholder="e.g. 1" style="width: 5em;">
+        </label>
+        <label>Due date:
+          <input type="date" id="test-create-due-date">
+        </label>
+        <label>Points:
+          <input type="number" id="test-create-points" value="20" min="1" step="1" style="width: 5em;">
+        </label>
+        <label>
+          <input type="checkbox" id="test-create-draft" checked>
+          Save as draft
+        </label>
+        <button id="test-create-btn" type="button">Create assignment</button>
+      </div>
+      <p class="muted">
+        Creates "Typing Test Results &lt;number&gt;" in each checked class, filed
+        under "Pending" like other tool-created assignments. Only
+        assignments this tool creates can later be graded by it &mdash;
+        Classroom refuses to let one app patch a grade on coursework another
+        app (or a person, by hand) created.
+      </p>
+      <div id="test-create-progress" class="progress" hidden></div>
+
+      <div class="subsection">
+        <h3>Grade</h3>
+
+        <div id="test-grade-upload-step">
+          <p class="muted">
+            Upload a Typing.com "Test Activity Details" CSV export. Grading
+            rule: a "3 Minute Typing Test" dated inside your chosen window,
+            turned in = full points; taken but not turned in = 80%; no
+            qualifying test once the window closes = 0. Other test lengths
+            (1 Minute, 5 Minute, 1 Page) are ignored. The CSV is parsed
+            entirely in your browser &mdash; it is never uploaded anywhere.
+          </p>
+          <input type="file" id="test-csv-input" accept=".csv">
+        </div>
+
+        <div id="test-grade-class-step" hidden>
+          <button id="test-back-to-upload-btn" class="button-link" type="button">&larr; Load a different CSV</button>
+          <div class="filters">
+            <label>Class:
+              <select id="test-class-select"></select>
+            </label>
+            <label>Number:
+              <input type="text" id="test-grade-number" placeholder="e.g. 1" style="width: 5em;">
+            </label>
+            <label>Start date:
+              <input type="date" id="test-start-date">
+            </label>
+            <label>End date:
+              <input type="date" id="test-end-date">
+            </label>
+            <button id="test-load-btn" type="button">Load</button>
+          </div>
+          <p class="muted">
+            Number must match the "Typing Test Results &lt;number&gt;"
+            assignment you created above for this checkpoint.
+          </p>
+          <div id="test-class-progress" class="progress" hidden></div>
+        </div>
+
+        <div id="test-preview-step" hidden>
+          <h4>Grade &mdash; <span id="test-preview-class"></span></h4>
+          <p class="muted" id="test-preview-range"></p>
+          <button id="test-change-class-btn" class="button-link" type="button">&larr; Change class / window</button>
+          <div id="test-groups-container"></div>
+          <div id="test-submit-progress" class="progress" hidden></div>
+          <button id="test-submit-btn" type="button">Submit checked grades to Classroom</button>
+        </div>
+
+        <div id="test-results-step" hidden>
+          <h4>Results</h4>
+          <button id="test-grade-another-btn" class="button-link" type="button">&larr; Grade another window (same CSV)</button>
+          <button id="test-grade-another-csv-btn" class="button-link" type="button">&larr; Load a different CSV</button>
+          <div id="test-results-container"></div>
+        </div>
+      </div>
+    </section>
   </main>
 
   <script src="js/curriculum.js"></script>
   <script src="js/assignmentTemplate.js"></script>
+  <script src="js/reminderTemplate.js"></script>
+  <script src="js/testTemplate.js"></script>
   <script src="js/csvParser.js"></script>
+  <script src="js/testCsvParser.js"></script>
   <script src="js/matcher.js"></script>
   <script src="js/auth.js"></script>
   <script src="js/classroomClient.js"></script>
+  <script src="js/gmailClient.js"></script>
   <script src="js/app.js"></script>
 </body>
 </html>

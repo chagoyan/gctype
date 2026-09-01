@@ -13,14 +13,27 @@
 const OAUTH_CLIENT_ID =
   "8527216010-4k8cqguj42qjfa812a6m1b278ia5f7sj.apps.googleusercontent.com";
 
-// Matches SCOPES in typing-grader/grader/classroom_client.py exactly,
-// including classroom.topics -- needed for get_or_create_topic /
-// find_topic_by_name (the "Pending" topic assignments get filed under).
+// Matches SCOPES in typing-grader/grader/classroom_client.py, plus two
+// scopes the Flask version never needed (added 2026-08-31 for the "remind
+// students who forgot to turn in" feature):
+//   - classroom.profile.emails: roster entries include profile.emailAddress
+//     only with this scope granted; without it getRoster()'s email field is
+//     always empty.
+//   - gmail.send: lets gmailClient.js send the reminder emails as Manuel,
+//     via the Gmail API's messages.send. Send-only -- this app never reads
+//     Gmail.
+// IMPORTANT: adding a scope here requires it to also be added to the OAuth
+// consent screen's scope list for the classroom-web-sync GCP project
+// (APIs & Services > OAuth consent screen > Edit > Scopes), and the Gmail
+// API enabled for that project (APIs & Services > Library), or the token
+// grant will fail. See project memory project_typing_auto_grader_tool.
 const OAUTH_SCOPES = [
   "https://www.googleapis.com/auth/classroom.courses.readonly",
   "https://www.googleapis.com/auth/classroom.rosters.readonly",
   "https://www.googleapis.com/auth/classroom.coursework.students",
   "https://www.googleapis.com/auth/classroom.topics",
+  "https://www.googleapis.com/auth/classroom.profile.emails",
+  "https://www.googleapis.com/auth/gmail.send",
 ].join(" ");
 
 let tokenClient = null;

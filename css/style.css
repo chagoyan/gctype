@@ -220,6 +220,13 @@ tr.status-already_graded td {
   color: #888;
 }
 
+.remind-section,
+.subsection {
+  margin-top: 2rem;
+  padding-top: 1.25rem;
+  border-top: 2px solid #eee;
+}
+
 tr.ok td { background: #f0fff4; }
 tr.fail td { background: #fff0f0; }
 

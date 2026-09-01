@@ -111,6 +111,10 @@ class ClassroomClient {
         givenName: name.givenName || "",
         familyName: name.familyName || "",
         fullName: name.fullName || "",
+        // Only populated with the classroom.profile.emails scope granted
+        // (see auth.js) -- empty string otherwise. Used by the "remind
+        // students who forgot to turn in" feature to address the email.
+        email: (s.profile && s.profile.emailAddress) || "",
       };
     });
   }

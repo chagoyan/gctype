@@ -21,6 +21,14 @@ const {
   curriculumLessonGroups,
 } = require("../js/curriculum.js");
 const { buildAssignmentDescription } = require("../js/assignmentTemplate.js");
+const { buildReminderEmail, reminderCandidates } = require("../js/reminderTemplate.js");
+const {
+  QUALIFYING_TEST_TYPE,
+  parseUsDate,
+  parseTestActivityCsv,
+  hasQualifyingTest,
+} = require("../js/testCsvParser.js");
+const { buildTestAssignmentTitle, buildTestAssignmentDescription } = require("../js/testTemplate.js");
 
 let passed = 0;
 let failed = 0;
@@ -258,6 +266,194 @@ test("buildAssignmentDescription fills in every {lesson} placeholder, not just t
   const occurrences = desc.split("Learn the Keys 1: 1. J, F, and Space").length - 1;
   assert.strictEqual(occurrences, 2, `expected 2 occurrences, got ${occurrences}`);
   assert.ok(!desc.includes("{lesson}"), "no unfilled {lesson} placeholder should remain");
+});
+
+console.log("\nreminderTemplate.js");
+
+test("buildReminderEmail fills {firstName} (both occurrences) and lists every lesson", () => {
+  const candidate = {
+    email: "a@example.com",
+    firstName: "Alex",
+    lastName: "Ríos",
+    lessons: ["WAD-P2-S1-2627 — Learn the Keys 1: 1. J, F, and Space", "WAD-P2-S1-2627 — Learn the Keys 1: 2. U, R, and K Keys"],
+  };
+  const { subject, body } = buildReminderEmail(
+    candidate,
+    "Reminder for {firstName}",
+    "Hi {firstName}, you finished:\n{lessons}\nThanks, {firstName}"
+  );
+  assert.strictEqual(subject, "Reminder for Alex");
+  assert.ok(body.includes("Hi Alex, you finished:"));
+  assert.ok(body.includes("- WAD-P2-S1-2627 — Learn the Keys 1: 1. J, F, and Space"));
+  assert.ok(body.includes("- WAD-P2-S1-2627 — Learn the Keys 1: 2. U, R, and K Keys"));
+  assert.ok(body.endsWith("Thanks, Alex"), "second {firstName} occurrence should also be filled");
+});
+
+test("buildReminderEmail defaults to the built-in templates when none given", () => {
+  const { subject, body } = buildReminderEmail({ email: "a@x.com", firstName: "Jo", lastName: "Lee", lessons: ["L1"] });
+  assert.ok(subject.length > 0);
+  assert.ok(body.includes("Jo"));
+});
+
+console.log("\nreminderTemplate.js: reminderCandidates()");
+
+function studentRow(overrides) {
+  return {
+    firstName: "First",
+    lastName: "Last",
+    progressPct: 100,
+    status: "matched",
+    turnedIn: false,
+    email: "student@example.com",
+    ...overrides,
+  };
+}
+
+test("includes a matched, 100%-progress, not-turned-in student with an email", () => {
+  const plan = [{ className: "WAD-P2", lesson: "Lesson A", students: [studentRow({})] }];
+  const candidates = reminderCandidates(plan);
+  assert.strictEqual(candidates.length, 1);
+  assert.strictEqual(candidates[0].email, "student@example.com");
+  assert.deepStrictEqual(candidates[0].lessons, ["WAD-P2 — Lesson A"]);
+});
+
+test("also includes not_yet_due (pre-due-date) students, same as matched", () => {
+  const plan = [{ className: "WAD-P2", lesson: "Lesson A", students: [studentRow({ status: "not_yet_due" })] }];
+  assert.strictEqual(reminderCandidates(plan).length, 1);
+});
+
+test("excludes a student who has turned in", () => {
+  const plan = [{ className: "WAD-P2", lesson: "Lesson A", students: [studentRow({ turnedIn: true })] }];
+  assert.strictEqual(reminderCandidates(plan).length, 0);
+});
+
+test("excludes a student under 100% progress", () => {
+  const plan = [{ className: "WAD-P2", lesson: "Lesson A", students: [studentRow({ progressPct: 99 })] }];
+  assert.strictEqual(reminderCandidates(plan).length, 0);
+});
+
+test("excludes a student with no email on file", () => {
+  const plan = [{ className: "WAD-P2", lesson: "Lesson A", students: [studentRow({ email: null })] }];
+  assert.strictEqual(reminderCandidates(plan).length, 0);
+});
+
+test("excludes non-matched statuses (ambiguous, not_found, no_submission, already_graded)", () => {
+  for (const status of ["ambiguous", "not_found", "no_submission", "already_graded"]) {
+    const plan = [{ className: "WAD-P2", lesson: "Lesson A", students: [studentRow({ status })] }];
+    assert.strictEqual(reminderCandidates(plan).length, 0, `status ${status} should be excluded`);
+  }
+});
+
+test("dedupes one student across two lesson groups into a single candidate with both lessons", () => {
+  const plan = [
+    { className: "WAD-P2", lesson: "Lesson A", students: [studentRow({})] },
+    { className: "WAD-P2", lesson: "Lesson B", students: [studentRow({})] },
+  ];
+  const candidates = reminderCandidates(plan);
+  assert.strictEqual(candidates.length, 1);
+  assert.deepStrictEqual(candidates[0].lessons, ["WAD-P2 — Lesson A", "WAD-P2 — Lesson B"]);
+});
+
+console.log("\ntestCsvParser.js against real CSV export");
+
+const testCsvPath = path.join(__dirname, "..", "..", "Test-Activity-Details.csv");
+const testCsvText = fs.readFileSync(testCsvPath, "utf8");
+const testRows = parseTestActivityCsv(testCsvText);
+
+test("parses all data rows (520 expected)", () => {
+  assert.strictEqual(testRows.length, 520, `got ${testRows.length} rows`);
+});
+
+test("every parsed row has non-empty first/last/class/test and a real Date", () => {
+  for (const r of testRows) {
+    assert.ok(r.firstName && r.lastName && r.className && r.test);
+    assert.ok(r.date instanceof Date && !Number.isNaN(r.date.getTime()));
+  }
+});
+
+test("counts match a hand-tally of the export (356 three-minute rows, 6 classes)", () => {
+  const threeMin = testRows.filter((r) => r.test === QUALIFYING_TEST_TYPE);
+  assert.strictEqual(threeMin.length, 356, `got ${threeMin.length} qualifying-type rows`);
+  const classes = new Set(testRows.map((r) => r.className));
+  assert.strictEqual(classes.size, 6, `got ${classes.size} classes`);
+});
+
+test("Josiah Cannon's 3-minute attempts land on the expected dates", () => {
+  const rows = testRows.filter(
+    (r) => r.firstName === "Josiah" && r.lastName === "Cannon" && r.test === QUALIFYING_TEST_TYPE
+  );
+  const isoDates = rows.map((d) => d.date.toISOString().slice(0, 10)).sort();
+  assert.deepStrictEqual(isoDates, ["2026-08-18", "2026-08-18", "2026-08-20", "2026-08-24"]);
+});
+
+console.log("\ntestCsvParser.js: parseUsDate()");
+
+test("parses a valid MM/DD/YYYY date as local midnight", () => {
+  const d = parseUsDate("08/20/2026");
+  assert.strictEqual(d.getFullYear(), 2026);
+  assert.strictEqual(d.getMonth(), 7); // 0-indexed
+  assert.strictEqual(d.getDate(), 20);
+  assert.strictEqual(d.getHours(), 0);
+});
+
+test("rejects a nonsense date instead of silently rolling over", () => {
+  assert.strictEqual(parseUsDate("13/40/2026"), null);
+});
+
+test("rejects a malformed / empty string", () => {
+  assert.strictEqual(parseUsDate("not a date"), null);
+  assert.strictEqual(parseUsDate(""), null);
+});
+
+console.log("\ntestCsvParser.js: hasQualifyingTest()");
+
+const cannonRows = testRows.filter(
+  (r) => r.firstName === "Josiah" && r.lastName === "Cannon" && r.test === QUALIFYING_TEST_TYPE
+);
+
+test("finds a qualifying attempt when the window covers it", () => {
+  assert.strictEqual(
+    hasQualifyingTest(cannonRows, QUALIFYING_TEST_TYPE, parseUsDate("08/18/2026"), parseUsDate("08/18/2026")),
+    true
+  );
+});
+
+test("both window boundary days are inclusive", () => {
+  assert.strictEqual(
+    hasQualifyingTest(cannonRows, QUALIFYING_TEST_TYPE, parseUsDate("08/19/2026"), parseUsDate("08/25/2026")),
+    true // 08/20 and 08/24 both fall inside
+  );
+});
+
+test("finds nothing when the window misses every attempt", () => {
+  assert.strictEqual(
+    hasQualifyingTest(cannonRows, QUALIFYING_TEST_TYPE, parseUsDate("08/21/2026"), parseUsDate("08/23/2026")),
+    false
+  );
+});
+
+test("finds nothing when the test-type filter doesn't match, even inside the window", () => {
+  assert.strictEqual(
+    hasQualifyingTest(cannonRows, "1 Minute Typing Test", parseUsDate("08/01/2026"), parseUsDate("08/31/2026")),
+    false
+  );
+});
+
+console.log("\ntestTemplate.js");
+
+test("buildTestAssignmentTitle builds the exact fixed-prefix title", () => {
+  assert.strictEqual(buildTestAssignmentTitle(1), "Typing Test Results 1");
+  assert.strictEqual(buildTestAssignmentTitle("2"), "Typing Test Results 2");
+});
+
+test("buildTestAssignmentTitle trims stray whitespace so it doesn't break exact-title matching later", () => {
+  assert.strictEqual(buildTestAssignmentTitle("  3  "), "Typing Test Results 3");
+});
+
+test("buildTestAssignmentDescription fills in the title with no placeholder left behind", () => {
+  const desc = buildTestAssignmentDescription(4);
+  assert.ok(desc.startsWith("Typing Test Results 4"));
+  assert.ok(!desc.includes("{title}"), "no unfilled {title} placeholder should remain");
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
