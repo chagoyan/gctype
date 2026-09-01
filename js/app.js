@@ -159,6 +159,7 @@ async function buildPlan(csvText, selectedClassName, onProgress) {
         progressPct: row.progressPct,
         status,
         grade: null,
+        existingGrade: null,
         submissionId: null,
         turnedIn: null,
       };
@@ -173,6 +174,12 @@ async function buildPlan(csvText, selectedClassName, onProgress) {
           const turnedIn = submission.state === "TURNED_IN" || submission.state === "RETURNED";
           studentEntry.submissionId = submission.id;
           studentEntry.turnedIn = turnedIn;
+          // assignedGrade is absent/undefined until a grade has actually
+          // been patched -- normalize to null so "no existing grade" and
+          // "existing grade of 0" are distinguishable below.
+          const existingGrade =
+            submission.assignedGrade === undefined ? null : submission.assignedGrade;
+          studentEntry.existingGrade = existingGrade;
 
           // Submitted + 100% complete grades immediately, due date or not.
           // Anything short of that (not turned in, or turned in but under
@@ -184,7 +191,19 @@ async function buildPlan(csvText, selectedClassName, onProgress) {
           // "resubmitted" once the student did turn it in.
           const fullyDone = turnedIn && fullCredit(row.progressPct);
           if (fullyDone || isDueDateReached(entry.coursework.dueDate)) {
-            studentEntry.grade = computeGrade(row.progressPct, maxPoints, turnedIn);
+            const computed = computeGrade(row.progressPct, maxPoints, turnedIn);
+            studentEntry.grade = computed;
+            // Same CSV row matched against a submission already carrying
+            // this exact grade -- re-patching would be a no-op write to
+            // Classroom. This is what caused already-graded students to
+            // keep getting (re-)checked and resubmitted on every run of an
+            // overlapping CSV. Only skip on an exact match: if the existing
+            // grade differs from what's computed now (e.g. a student
+            // resubmitted after being graded), leave status "matched" so
+            // it's still selectable for a manual regrade.
+            if (existingGrade !== null && existingGrade === computed) {
+              studentEntry.status = "already_graded";
+            }
           } else {
             studentEntry.status = "not_yet_due";
           }
@@ -209,6 +228,7 @@ const STATUS_LABELS = {
   ambiguous: "Ambiguous name match on roster — needs manual grading",
   not_found: "Not found on roster — needs manual grading",
   not_yet_due: "Not yet due — waiting to grade incomplete/not-turned-in work",
+  already_graded: "Already graded in Classroom — no change, skipped",
 };
 
 // ---------------------------------------------------------------------

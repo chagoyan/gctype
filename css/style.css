@@ -215,6 +215,11 @@ tr.status-not_found td, tr.status-ambiguous td, tr.status-no_submission td {
   background: #fff8f0;
 }
 
+tr.status-already_graded td {
+  background: #fafafa;
+  color: #888;
+}
+
 tr.ok td { background: #f0fff4; }
 tr.fail td { background: #fff0f0; }
 
