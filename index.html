@@ -110,8 +110,16 @@
         <label>Lesson:
           <select id="filter-lesson"><option value="">All lessons</option></select>
         </label>
+        <label class="filter-check">
+          <input type="checkbox" id="filter-hide-graded">
+          Hide fully graded assignments <span id="hide-graded-count" class="muted"></span>
+        </label>
       </div>
 
+      <p id="all-graded-note" class="muted" hidden>
+        Every assignment for this class is already graded in Classroom.
+        Uncheck "Hide fully graded assignments" to see them.
+      </p>
       <div id="groups-container"></div>
 
       <div id="submit-progress" class="progress" hidden></div>

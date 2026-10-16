@@ -37,9 +37,30 @@ const PENDING_TOPIC_NAME = "Pending";
 // own retry-with-backoff -- see the comments at each call site.
 const CLASS_CREATE_DELAY_MS = 600;
 
+// Per-browser checkbox preferences, remembered between visits.
+const HIDE_GRADED_PREF = "gctype.hideFullyGraded";
+
 // ---------------------------------------------------------------------
 // Small view helpers
 // ---------------------------------------------------------------------
+
+// localStorage can be unavailable (private window, blocked site data), so
+// both helpers fail quietly -- the checkbox just isn't remembered.
+function loadPref(key) {
+  try {
+    return localStorage.getItem(key) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function savePref(key, value) {
+  try {
+    localStorage.setItem(key, String(value));
+  } catch {
+    // Not remembered this time; nothing else depends on it.
+  }
+}
 
 function showView(name) {
   for (const el of document.querySelectorAll(".view")) {
@@ -266,6 +287,22 @@ async function fetchRowsListedElsewhere(allRows, selectedClassName, roster) {
     }
   }
   return rowsListedElsewhere(allRows, selectedClassName, candidates, otherRosters);
+}
+
+/**
+ * An assignment with nothing left for this tool to grade: it exists in
+ * Classroom, at least one student already has their grade, and nobody is
+ * still waiting to be graded ("matched") or held until the due date
+ * ("not_yet_due"). Rows needing manual grading (not on roster, etc.) don't
+ * keep it showing -- the tool can't act on those anyway. Drives the "Hide
+ * fully graded assignments" toggle.
+ */
+function isFullyGraded(entry) {
+  if (!entry.coursework) return false;
+  return (
+    entry.students.some((s) => s.status === "already_graded") &&
+    !entry.students.some((s) => s.status === "matched" || s.status === "not_yet_due")
+  );
 }
 
 // ---------------------------------------------------------------------
@@ -512,6 +549,7 @@ function renderPreview() {
     section.className = "group";
     section.dataset.unit = entry.unit;
     section.dataset.lesson = entry.lesson;
+    section.dataset.fullyGraded = String(isFullyGraded(entry));
 
     const heading = document.createElement("h2");
     heading.textContent = `${entry.className} — ${entry.lesson}`;
@@ -606,14 +644,24 @@ function renderPreview() {
 function setupFilters() {
   const unitSelect = document.getElementById("filter-unit");
   const lessonSelect = document.getElementById("filter-lesson");
+  const hideGraded = document.getElementById("filter-hide-graded");
+  const allGradedNote = document.getElementById("all-graded-note");
   const sections = Array.from(document.querySelectorAll("#groups-container .group"));
+
+  hideGraded.checked = loadPref(HIDE_GRADED_PREF);
+  const gradedCount = sections.filter((s) => s.dataset.fullyGraded === "true").length;
+  document.getElementById("hide-graded-count").textContent = `(${gradedCount})`;
+
+  // Applied before the Unit/Lesson filters, so their dropdowns only offer
+  // units and lessons that still have something showing.
+  const shownByToggle = (s) => !hideGraded.checked || s.dataset.fullyGraded !== "true";
 
   function uniqueValues(attr, matches) {
     const seen = new Set();
     const values = [];
     for (const s of sections) {
       const v = s.dataset[attr];
-      if (matches(s) && !seen.has(v)) {
+      if (shownByToggle(s) && matches(s) && !seen.has(v)) {
         seen.add(v);
         values.push(v);
       }
@@ -651,9 +699,13 @@ function setupFilters() {
     const unit = unitSelect.value;
     const lesson = lessonSelect.value;
     for (const s of sections) {
-      const match = (unit === "" || s.dataset.unit === unit) && (lesson === "" || s.dataset.lesson === lesson);
+      const match =
+        shownByToggle(s) &&
+        (unit === "" || s.dataset.unit === unit) &&
+        (lesson === "" || s.dataset.lesson === lesson);
       s.style.display = match ? "" : "none";
     }
+    allGradedNote.hidden = !(sections.length > 0 && !sections.some(shownByToggle));
   }
 
   fillSelect(unitSelect, uniqueValues("unit", () => true), "All units");
@@ -664,6 +716,12 @@ function setupFilters() {
     applyFilter();
   };
   lessonSelect.onchange = applyFilter;
+  hideGraded.onchange = () => {
+    savePref(HIDE_GRADED_PREF, hideGraded.checked);
+    fillSelect(unitSelect, uniqueValues("unit", () => true), "All units");
+    populateLessons();
+    applyFilter();
+  };
 
   populateLessons();
   applyFilter();
