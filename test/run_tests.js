@@ -10,7 +10,14 @@ const path = require("path");
 const assert = require("assert");
 
 const { parseTypingCsv, groupByClassAndLesson } = require("../js/csvParser.js");
-const { computeGrade, isDueDateReached, matchStudent, normalizeName } = require("../js/matcher.js");
+const {
+  computeGrade,
+  isDueDateReached,
+  matchStudent,
+  normalizeName,
+  findStudentsListedElsewhere,
+  rowsListedElsewhere,
+} = require("../js/matcher.js");
 const {
   CURRICULUM,
   unitName,
@@ -154,6 +161,106 @@ test("flags not_found when no roster entry matches", () => {
 test("normalizeName collapses whitespace and case", () => {
   assert.strictEqual(normalizeName("  Emilio   "), "emilio");
   assert.strictEqual(normalizeName("Carmona  Santos"), "carmona santos");
+});
+
+console.log("\nmatcher.js students Typing.com lists under another class");
+
+// Typing.com lists each student under one class only: a student who
+// switched periods keeps the old class name, and a student in two periods
+// only shows up under one. Lesson-shaped rows; only names + className matter.
+const P1 = "WAD-P1-S1-2627";
+const P3 = "WAD-P3-S1-2627";
+const P5 = "WAD-P5-S1-2627";
+const elsewhereRows = [
+  { firstName: "Ada", lastName: "Lovelace", className: P1, lesson: "L1", progressPct: 100 },
+  { firstName: "Ada", lastName: "Lovelace", className: P1, lesson: "L2", progressPct: 40 },
+  { firstName: "Alan", lastName: "Turing", className: P3, lesson: "L1", progressPct: 100 },
+  { firstName: "Grace", lastName: "Hopper", className: P5, lesson: "L1", progressPct: 100 },
+];
+
+/** Run both steps the way app.js's fetchRowsListedElsewhere does. */
+function borrow(rows, selectedClassName, selectedRoster, otherRosters) {
+  const candidates = findStudentsListedElsewhere(rows, selectedClassName, selectedRoster);
+  return rowsListedElsewhere(rows, selectedClassName, candidates, new Map(Object.entries(otherRosters)));
+}
+
+test("switched periods: borrows the old class's rows when the old roster no longer has them", () => {
+  const p3Roster = [
+    { userId: "u-ada", givenName: "Ada", familyName: "Lovelace" },
+    { userId: "u-alan", givenName: "Alan", familyName: "Turing" },
+  ];
+  const borrowed = borrow(elsewhereRows, P3, p3Roster, { [P1]: [] });
+  assert.strictEqual(borrowed.length, 2);
+  for (const r of borrowed) {
+    assert.strictEqual(r.className, P3, "re-labelled so it groups with the selected class");
+    assert.strictEqual(r.listedUnder, P1);
+    assert.strictEqual(r.listedUnderAmbiguous, false);
+  }
+  assert.deepStrictEqual(borrowed.map((r) => r.lesson), ["L1", "L2"]);
+});
+
+test("two periods: borrows when the other roster has the same Classroom account", () => {
+  const p3Roster = [{ userId: "u-ada", givenName: "Ada", familyName: "Lovelace" }];
+  const p1Roster = [{ userId: "u-ada", givenName: "Ada", familyName: "Lovelace" }];
+  const borrowed = borrow(elsewhereRows, P3, p3Roster, { [P1]: p1Roster });
+  assert.strictEqual(borrowed.length, 2);
+  assert.ok(borrowed.every((r) => r.listedUnder === P1));
+});
+
+test("same name, different student: never borrows the other student's rows", () => {
+  const p3Roster = [{ userId: "u-ada-p3", givenName: "Ada", familyName: "Lovelace" }];
+  const p1Roster = [{ userId: "u-ada-p1", givenName: "Ada", familyName: "Lovelace" }];
+  assert.strictEqual(borrow(elsewhereRows, P3, p3Roster, { [P1]: p1Roster }).length, 0);
+});
+
+test("a student with rows under the selected class isn't looked up elsewhere", () => {
+  const p3Roster = [{ userId: "u-alan", givenName: "Alan", familyName: "Turing" }];
+  const candidates = findStudentsListedElsewhere(elsewhereRows, P3, p3Roster);
+  assert.strictEqual(candidates.length, 0);
+});
+
+test("a roster student with no rows anywhere isn't a candidate", () => {
+  const p3Roster = [{ userId: "u-kat", givenName: "Katherine", familyName: "Johnson" }];
+  assert.strictEqual(findStudentsListedElsewhere(elsewhereRows, P3, p3Roster).length, 0);
+});
+
+test("borrows when the other class has no active Classroom course (null roster)", () => {
+  const p3Roster = [{ userId: "u-ada", givenName: "Ada", familyName: "Lovelace" }];
+  assert.strictEqual(borrow(elsewhereRows, P3, p3Roster, { [P1]: null }).length, 2);
+});
+
+test("name matching across classes ignores case and extra spaces", () => {
+  const p3Roster = [{ userId: "u-ada", givenName: " ada ", familyName: "LOVELACE" }];
+  assert.strictEqual(borrow(elsewhereRows, P3, p3Roster, { [P1]: [] }).length, 2);
+});
+
+test("listed under two trusted classes: includes both but marks them ambiguous", () => {
+  const rows = elsewhereRows.concat([
+    { firstName: "Ada", lastName: "Lovelace", className: P5, lesson: "L1", progressPct: 100 },
+  ]);
+  const p3Roster = [{ userId: "u-ada", givenName: "Ada", familyName: "Lovelace" }];
+  const borrowed = borrow(rows, P3, p3Roster, { [P1]: [], [P5]: [] });
+  assert.strictEqual(borrowed.length, 3);
+  assert.ok(borrowed.every((r) => r.listedUnderAmbiguous === true));
+  assert.deepStrictEqual([...new Set(borrowed.map((r) => r.listedUnder))].sort(), [P1, P5]);
+});
+
+test("only the trusted class counts when the other has a different same-named student", () => {
+  const rows = elsewhereRows.concat([
+    { firstName: "Ada", lastName: "Lovelace", className: P5, lesson: "L1", progressPct: 100 },
+  ]);
+  const p3Roster = [{ userId: "u-ada", givenName: "Ada", familyName: "Lovelace" }];
+  const p5Roster = [{ userId: "u-other-ada", givenName: "Ada", familyName: "Lovelace" }];
+  const borrowed = borrow(rows, P3, p3Roster, { [P1]: [], [P5]: p5Roster });
+  assert.strictEqual(borrowed.length, 2);
+  assert.ok(borrowed.every((r) => r.listedUnder === P1 && r.listedUnderAmbiguous === false));
+});
+
+test("doesn't modify the original CSV rows", () => {
+  const p3Roster = [{ userId: "u-ada", givenName: "Ada", familyName: "Lovelace" }];
+  borrow(elsewhereRows, P3, p3Roster, { [P1]: [] });
+  assert.strictEqual(elsewhereRows[0].className, P1);
+  assert.strictEqual(elsewhereRows[0].listedUnder, undefined);
 });
 
 console.log("\ncurriculum.js");

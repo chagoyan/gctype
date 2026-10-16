@@ -110,19 +110,29 @@ async function buildPlan(csvText, selectedClassName, onProgress) {
   // over time, so exported data can carry a stale number for a lesson that
   // still exists (see canonicalizeLesson), and grouping/matching both key
   // on the exact lesson string.
-  const rows = parseTypingCsv(csvText).map((row) => ({
+  const allRows = parseTypingCsv(csvText).map((row) => ({
     ...row,
     lesson: canonicalizeLesson(row.lesson),
   }));
+
+  // The roster is needed before grouping, not just per group: students
+  // who switched into this class, or who are in two of the teacher's
+  // periods, are on this roster but Typing.com lists their rows under
+  // another class -- see fetchRowsListedElsewhere. Fetched once here
+  // rather than once per lesson group.
+  const course = await classroomClient.findCourseByName(selectedClassName);
+  const roster = course ? await classroomClient.getRoster(course.id) : null;
+  let rows = allRows.filter((r) => r.className === selectedClassName);
+  if (roster) {
+    rows = rows.concat(await fetchRowsListedElsewhere(allRows, selectedClassName, roster));
+  }
   const groups = groupByClassAndLesson(rows);
 
-  const sortedGroups = [...groups.values()]
-    .filter((g) => g.className === selectedClassName)
-    .sort((a, b) => {
-      const byUnit = compareUnitKeys(unitSortKey(unitName(a.lesson)), unitSortKey(unitName(b.lesson)));
-      if (byUnit !== 0) return byUnit;
-      return compareNaturalKeys(naturalSortKey(a.lesson), naturalSortKey(b.lesson));
-    });
+  const sortedGroups = [...groups.values()].sort((a, b) => {
+    const byUnit = compareUnitKeys(unitSortKey(unitName(a.lesson)), unitSortKey(unitName(b.lesson)));
+    if (byUnit !== 0) return byUnit;
+    return compareNaturalKeys(naturalSortKey(a.lesson), naturalSortKey(b.lesson));
+  });
 
   const plan = [];
   let done = 0;
@@ -142,7 +152,6 @@ async function buildPlan(csvText, selectedClassName, onProgress) {
       students: [],
     };
 
-    const course = await classroomClient.findCourseByName(group.className);
     if (!course) {
       entry.courseError = `No active Classroom course named "${group.className}" found.`;
       plan.push(entry);
@@ -158,17 +167,18 @@ async function buildPlan(csvText, selectedClassName, onProgress) {
     }
     entry.coursework = coursework;
 
-    const roster = await classroomClient.getRoster(course.id);
     const submissions = await classroomClient.getSubmissions(course.id, coursework.id);
     const subsByUser = new Map(submissions.map((s) => [s.userId, s]));
     const maxPoints = coursework.maxPoints || 0;
 
     for (const row of group.rows) {
-      const { student, status } = matchStudent(row.firstName, row.lastName, roster);
+      let { student, status } = matchStudent(row.firstName, row.lastName, roster);
+      if (status === "matched" && row.listedUnderAmbiguous) status = "listed_elsewhere_ambiguous";
       const studentEntry = {
         firstName: row.firstName,
         lastName: row.lastName,
         progressPct: row.progressPct,
+        listedUnder: row.listedUnder || null,
         status,
         grade: null,
         existingGrade: null,
@@ -236,6 +246,28 @@ async function buildPlan(csvText, selectedClassName, onProgress) {
   return plan;
 }
 
+/**
+ * Rows Typing.com lists under another class that belong to a student on
+ * `roster` -- a student who switched into this class, or one in two of the
+ * teacher's periods. Fetches only the rosters of classes where one of this
+ * class's students' names actually shows up (usually none or one), so the
+ * matcher can tell the same student apart from a different student who
+ * shares the name. Shared by buildPlan and buildTestPlan; the matching
+ * rules themselves live in matcher.js.
+ */
+async function fetchRowsListedElsewhere(allRows, selectedClassName, roster) {
+  const candidates = findStudentsListedElsewhere(allRows, selectedClassName, roster);
+  const otherRosters = new Map();
+  for (const { sourceClasses } of candidates) {
+    for (const className of sourceClasses) {
+      if (otherRosters.has(className)) continue;
+      const course = await classroomClient.findCourseByName(className);
+      otherRosters.set(className, course ? await classroomClient.getRoster(course.id) : null);
+    }
+  }
+  return rowsListedElsewhere(allRows, selectedClassName, candidates, otherRosters);
+}
+
 // ---------------------------------------------------------------------
 // Preview rendering (typing-grader/templates/preview.html)
 // ---------------------------------------------------------------------
@@ -244,10 +276,28 @@ const STATUS_LABELS = {
   matched: "Matched",
   no_submission: "Matched, but no submission record found — needs manual grading",
   ambiguous: "Ambiguous name match on roster — needs manual grading",
-  not_found: "Not found on roster — needs manual grading",
+  not_found: "Not on this class's roster — needs manual grading (if they switched periods, grade them from their new class)",
+  listed_elsewhere_ambiguous: "Typing.com lists this name under more than one other class — needs manual grading",
   not_yet_due: "Not yet due — waiting to grade incomplete/not-turned-in work",
   already_graded: "Already graded in Classroom — no change, skipped",
 };
+
+/**
+ * Student name cell for both preview tables. Adds a note when the row came
+ * from another class in the CSV, so it's clear why a student Typing.com
+ * files elsewhere is being graded here.
+ */
+function studentNameCell(s) {
+  const td = document.createElement("td");
+  td.textContent = `${s.firstName} ${s.lastName}`;
+  if (s.listedUnder) {
+    const note = document.createElement("div");
+    note.className = "muted";
+    note.textContent = `Typing.com lists under ${s.listedUnder}`;
+    td.appendChild(note);
+  }
+  return td;
+}
 
 // ---------------------------------------------------------------------
 // "Create Assignments" picker (typing-grader/preview.html's ahead-of-time
@@ -516,9 +566,7 @@ function renderPreview() {
         }
         tr.appendChild(tdCheck);
 
-        const tdName = document.createElement("td");
-        tdName.textContent = `${s.firstName} ${s.lastName}`;
-        tr.appendChild(tdName);
+        tr.appendChild(studentNameCell(s));
 
         const tdProgress = document.createElement("td");
         tdProgress.textContent = `${s.progressPct}%`;
@@ -906,7 +954,8 @@ function populateTestClassPicker(classNames) {
  * groups like buildPlan() -- there's only ever one assignment in play here.
  */
 async function buildTestPlan(csvText, selectedClassName, number, startDate, endDate) {
-  const allRows = parseTestActivityCsv(csvText).filter((r) => r.className === selectedClassName);
+  const allRows = parseTestActivityCsv(csvText);
+  let classRows = allRows.filter((r) => r.className === selectedClassName);
   const title = buildTestAssignmentTitle(number);
 
   const entry = {
@@ -936,6 +985,9 @@ async function buildTestPlan(csvText, selectedClassName, number, startDate, endD
   entry.coursework = coursework;
 
   const roster = await classroomClient.getRoster(course.id);
+  // Students who switched into this class or are in two of the teacher's
+  // periods -- see buildPlan / fetchRowsListedElsewhere.
+  classRows = classRows.concat(await fetchRowsListedElsewhere(allRows, selectedClassName, roster));
   const submissions = await classroomClient.getSubmissions(course.id, coursework.id);
   const subsByUser = new Map(submissions.map((s) => [s.userId, s]));
   const maxPoints = coursework.maxPoints || 0;
@@ -945,7 +997,7 @@ async function buildTestPlan(csvText, selectedClassName, number, startDate, endD
   // nothing all period) never surfaces here, same limitation buildPlan()
   // already has for lessons: nothing to grade without CSV data for them.
   const rowsByStudent = new Map();
-  for (const row of allRows) {
+  for (const row of classRows) {
     const key = `${row.firstName}|${row.lastName}`;
     if (!rowsByStudent.has(key)) rowsByStudent.set(key, []);
     rowsByStudent.get(key).push(row);
@@ -953,13 +1005,18 @@ async function buildTestPlan(csvText, selectedClassName, number, startDate, endD
 
   for (const studentRows of rowsByStudent.values()) {
     const { firstName, lastName } = studentRows[0];
-    const { student, status } = matchStudent(firstName, lastName, roster);
+    let { student, status } = matchStudent(firstName, lastName, roster);
+    if (status === "matched" && studentRows.some((r) => r.listedUnderAmbiguous)) {
+      status = "listed_elsewhere_ambiguous";
+    }
     const tookQualifyingTest = hasQualifyingTest(studentRows, QUALIFYING_TEST_TYPE, startDate, endDate);
+    const listedUnder = [...new Set(studentRows.map((r) => r.listedUnder).filter(Boolean))].join(", ");
 
     const studentEntry = {
       firstName,
       lastName,
       tookQualifyingTest,
+      listedUnder: listedUnder || null,
       status,
       grade: null,
       existingGrade: null,
@@ -1093,9 +1150,7 @@ function renderTestPreview(entry) {
       }
       tr.appendChild(tdCheck);
 
-      const tdName = document.createElement("td");
-      tdName.textContent = `${s.firstName} ${s.lastName}`;
-      tr.appendChild(tdName);
+      tr.appendChild(studentNameCell(s));
 
       const tdTook = document.createElement("td");
       tdTook.textContent = s.tookQualifyingTest ? "Yes" : "No";

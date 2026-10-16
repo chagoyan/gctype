@@ -211,7 +211,8 @@ th { background: #fafafa; }
 
 .error { color: #b00020; font-weight: 600; }
 
-tr.status-not_found td, tr.status-ambiguous td, tr.status-no_submission td {
+tr.status-not_found td, tr.status-ambiguous td, tr.status-no_submission td,
+tr.status-listed_elsewhere_ambiguous td {
   background: #fff8f0;
 }
 
