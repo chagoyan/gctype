@@ -396,6 +396,13 @@ test("parses a valid MM/DD/YYYY date as local midnight", () => {
   assert.strictEqual(d.getHours(), 0);
 });
 
+test("also parses M/D/YY (2-digit year) -- what Excel/Sheets reformats the Date column to after a hand-edit", () => {
+  const d = parseUsDate("8/20/26");
+  assert.strictEqual(d.getFullYear(), 2026);
+  assert.strictEqual(d.getMonth(), 7);
+  assert.strictEqual(d.getDate(), 20);
+});
+
 test("rejects a nonsense date instead of silently rolling over", () => {
   assert.strictEqual(parseUsDate("13/40/2026"), null);
 });

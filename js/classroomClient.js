@@ -7,20 +7,42 @@
 
 const CLASSROOM_API = "https://classroom.googleapis.com/v1";
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Statuses worth retrying: 429 (rate limit) and Google's own transient
+// server-side errors. A bare 500 "Internal error encountered." with no
+// further detail (seen 2026-09-09 creating back-to-back coursework across
+// classes) is Google's generic server hiccup, not a real conflict --
+// those come back with their own distinct messages -- so a short backoff
+// and retry clears it without surfacing anything to the user.
+const RETRYABLE_STATUSES = new Set([429, 500, 502, 503, 504]);
+const RETRY_DELAYS_MS = [600, 1500];
+
 async function classroomFetch(path, options = {}) {
   if (!isSignedIn()) {
     throw new Error("Not signed in (or token expired) -- call signIn() first.");
   }
-  const res = await fetch(`${CLASSROOM_API}${path}`, {
-    ...options,
-    headers: {
-      Authorization: `Bearer ${getAccessToken()}`,
-      "Content-Type": "application/json",
-      ...(options.headers || {}),
-    },
-  });
-  if (!res.ok) throw new Error(`Classroom API error ${res.status}: ${await res.text()}`);
-  return res.json();
+  let lastErr;
+  for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
+    const res = await fetch(`${CLASSROOM_API}${path}`, {
+      ...options,
+      headers: {
+        Authorization: `Bearer ${getAccessToken()}`,
+        "Content-Type": "application/json",
+        ...(options.headers || {}),
+      },
+    });
+    if (res.ok) return res.json();
+
+    const bodyText = await res.text();
+    lastErr = new Error(`Classroom API error ${res.status}: ${bodyText}`);
+    const canRetry = RETRYABLE_STATUSES.has(res.status) && attempt < RETRY_DELAYS_MS.length;
+    if (!canRetry) throw lastErr;
+    await sleep(RETRY_DELAYS_MS[attempt]);
+  }
+  throw lastErr;
 }
 
 /**

@@ -32,6 +32,10 @@ const DEFAULT_MAX_POINTS = 20;
 // Every assignment the tool creates is filed under this topic so it's easy
 // to find and re-file/re-title by hand afterward.
 const PENDING_TOPIC_NAME = "Pending";
+// Gap between classes when creating assignments across multiple
+// periods in the picker/test-create loops, on top of classroomFetch's
+// own retry-with-backoff -- see the comments at each call site.
+const CLASS_CREATE_DELAY_MS = 600;
 
 // ---------------------------------------------------------------------
 // Small view helpers
@@ -373,6 +377,11 @@ async function createAssignmentFromPicker() {
     // so flash messages come back in the same order the classes are listed.
     let done = 0;
     for (const className of classNames) {
+      // A short gap between classes, on top of classroomClient's own
+      // retry-with-backoff, so back-to-back topic+coursework writes across
+      // classes don't land on Google's API in a tight burst (seen causing
+      // a transient bare 500 "Internal error encountered." 2026-09-09).
+      if (done > 0) await sleep(CLASS_CREATE_DELAY_MS);
       done++;
       updateProgress(progressEl, `Creating "${lesson}" in ${className}… (${done} of ${classNames.length})`);
       try {
@@ -1242,6 +1251,8 @@ async function createTestAssignmentFromForm() {
     // keeps progress reporting accurate and flash messages in class order.
     let done = 0;
     for (const className of classNames) {
+      // See the matching comment in createAssignmentFromPicker.
+      if (done > 0) await sleep(CLASS_CREATE_DELAY_MS);
       done++;
       updateProgress(progressEl, `Creating "${title}" in ${className}… (${done} of ${classNames.length})`);
       try {

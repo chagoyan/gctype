@@ -69,17 +69,23 @@ function splitTestCsvLines(text) {
 }
 
 /**
- * Parse a Typing.com "Test Activity Details" export's "MM/DD/YYYY" date
- * string as a local-midnight Date. Returns null if malformed (including
- * nonsense like 13/40/2026, which JS's Date constructor would otherwise
- * silently roll over into a different date rather than reject).
+ * Parse a Typing.com "Test Activity Details" export's date string as a
+ * local-midnight Date. Accepts both "MM/DD/YYYY" (Typing.com's own export
+ * format) and "M/D/YY" -- a teacher opening the CSV in Excel/Sheets to
+ * hand-edit a row (e.g. fixing a class or student name) and re-saving is
+ * enough to make it reformat the Date column to a 2-digit year on its own,
+ * with no warning. A 2-digit year is treated as 2000+YY (so "26" ->
+ * 2026), which fits how these CSVs are actually used -- always the
+ * current school years, never last century. Returns null if malformed,
+ * including nonsense like 13/40/2026, which JS's Date constructor would
+ * otherwise silently roll over into a different date rather than reject.
  */
 function parseUsDate(str) {
-  const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec((str || "").trim());
+  const m = /^(\d{1,2})\/(\d{1,2})\/(\d{2}|\d{4})$/.exec((str || "").trim());
   if (!m) return null;
   const month = Number(m[1]);
   const day = Number(m[2]);
-  const year = Number(m[3]);
+  const year = m[3].length === 2 ? 2000 + Number(m[3]) : Number(m[3]);
   const d = new Date(year, month - 1, day);
   if (d.getFullYear() !== year || d.getMonth() !== month - 1 || d.getDate() !== day) {
     return null;
