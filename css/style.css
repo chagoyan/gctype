@@ -146,7 +146,8 @@ h1 { margin-bottom: 0.25rem; }
 
 /* Checkbox toggles sit inline with their text, unlike the select labels
    (which stack on narrow screens, see the max-width: 600px block). */
-.filters label.filter-check {
+.filters label.filter-check,
+.return-option {
   display: flex;
   flex-direction: row;
   align-items: center;
@@ -157,6 +158,10 @@ h1 { margin-bottom: 0.25rem; }
   margin: 0;
   padding: 0;
   width: auto;
+}
+
+.return-option {
+  margin: 1rem 0 0.5rem;
 }
 
 .class-picker {

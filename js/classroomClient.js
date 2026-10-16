@@ -162,6 +162,18 @@ class ClassroomClient {
     );
   }
 
+  /**
+   * Classroom's "Return" button: hands the graded submission back so the
+   * student sees their grade. Same coursework.students scope as patchGrade.
+   * Callers only return TURNED_IN work -- see app.js's gradeAndMaybeReturn.
+   */
+  async returnSubmission(courseId, courseworkId, submissionId) {
+    return classroomFetch(
+      `/courses/${courseId}/courseWork/${courseworkId}/studentSubmissions/${submissionId}:return`,
+      { method: "POST", body: "{}" }
+    );
+  }
+
   async turnIn(courseId, courseworkId, submissionId) {
     return classroomFetch(
       `/courses/${courseId}/courseWork/${courseworkId}/studentSubmissions/${submissionId}:turnIn`,

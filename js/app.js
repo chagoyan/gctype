@@ -39,6 +39,7 @@ const CLASS_CREATE_DELAY_MS = 600;
 
 // Per-browser checkbox preferences, remembered between visits.
 const HIDE_GRADED_PREF = "gctype.hideFullyGraded";
+const RETURN_GRADED_PREF = "gctype.returnGraded";
 
 // ---------------------------------------------------------------------
 // Small view helpers
@@ -222,6 +223,7 @@ async function buildPlan(csvText, selectedClassName, onProgress) {
         } else {
           const turnedIn = submission.state === "TURNED_IN" || submission.state === "RETURNED";
           studentEntry.submissionId = submission.id;
+          studentEntry.submissionState = submission.state;
           studentEntry.turnedIn = turnedIn;
           // assignedGrade is absent/undefined until a grade has actually
           // been patched -- normalize to null so "no existing grade" and
@@ -632,6 +634,9 @@ function renderPreview() {
   });
 
   setupFilters();
+  document.getElementById("return-graded").checked = loadPref(RETURN_GRADED_PREF);
+  syncReturnOption("return-graded", "submit-btn");
+  renderReturnBacklog("", currentPlan, "(across every assignment in this class, including hidden ones)");
   renderReminderSection();
   showView("grade-preview");
 }
@@ -731,6 +736,163 @@ function setupFilters() {
 // Submit (typing-grader/app.py submit route)
 // ---------------------------------------------------------------------
 
+/**
+ * Patch one student's grade and, when `returnToStudent` is on, return the
+ * submission too. Shared by the lesson and Typing Test submit loops.
+ *
+ * Only TURNED_IN work is returned. Returning work the student never turned
+ * in flips it to RETURNED, which buildPlan/buildTestPlan count as turned in
+ * -- the next run would then offer full credit for an 80% (or 0) grade.
+ * RETURNED work was already returned, so there's nothing to do.
+ *
+ * Returns { ok, message } for the results table. A failed return still
+ * counts as graded, but comes back ok: false so the row stands out.
+ */
+async function gradeAndMaybeReturn(entry, student, returnToStudent) {
+  try {
+    await classroomClient.patchGrade(entry.course.id, entry.coursework.id, student.submissionId, student.grade);
+  } catch (err) {
+    return { ok: false, message: `Failed: ${err.message}` };
+  }
+  if (!returnToStudent) return { ok: true, message: "Graded" };
+  if (student.submissionState === "RETURNED") return { ok: true, message: "Graded (already returned earlier)" };
+  if (student.submissionState !== "TURNED_IN") {
+    return { ok: true, message: "Graded — not returned, since it was never turned in" };
+  }
+  try {
+    await classroomClient.returnSubmission(entry.course.id, entry.coursework.id, student.submissionId);
+    return { ok: true, message: "Graded and returned" };
+  } catch (err) {
+    return { ok: false, message: `Graded, but couldn't return: ${err.message}` };
+  }
+}
+
+/**
+ * Keep a submit button's label in line with its "also return" checkbox, so
+ * it's obvious before clicking that grades will go back to students.
+ */
+function syncReturnOption(checkboxId, buttonId) {
+  const checked = document.getElementById(checkboxId).checked;
+  document.getElementById(buttonId).textContent = checked
+    ? "Submit checked grades and return to students"
+    : "Submit checked grades to Classroom";
+}
+
+/**
+ * Work graded on an earlier run ("already_graded") that's still sitting
+ * TURNED_IN -- graded but never returned, e.g. everything graded before
+ * the return option existed. Covers every entry passed in, regardless of
+ * the Unit/Lesson/hide filters. Same TURNED_IN-only rule as
+ * gradeAndMaybeReturn.
+ */
+function unreturnedGradedWork(entries) {
+  const items = [];
+  for (const entry of entries) {
+    if (!entry.course || !entry.coursework) continue;
+    for (const student of entry.students) {
+      if (student.status === "already_graded" && student.submissionState === "TURNED_IN") {
+        items.push({ entry, student });
+      }
+    }
+  }
+  return items;
+}
+
+/**
+ * Show the "Return already-graded work" block under a preview when there's
+ * anything to return. `prefix` is "" for the Grade tab, "test-" for the
+ * Typing Test tab (matching their element ids).
+ */
+function renderReturnBacklog(prefix, entries, scopeText) {
+  const count = unreturnedGradedWork(entries).length;
+  document.getElementById(`${prefix}return-backlog`).hidden = count === 0;
+  document.getElementById(`${prefix}return-backlog-text`).textContent =
+    `${count} graded ${count === 1 ? "submission hasn't" : "submissions haven't"} ` +
+    `been returned to students yet ${scopeText}.`;
+}
+
+/**
+ * Return each { entry, student } in `items`, one at a time. Safe to re-run
+ * after a partial failure: anything that didn't return is still TURNED_IN
+ * and shows up in the count again.
+ */
+async function returnEach(items, btn, progressEl) {
+  btn.disabled = true;
+  const results = [];
+  let done = 0;
+  try {
+    for (const { entry, student } of items) {
+      done++;
+      updateProgress(progressEl, `Returning ${student.firstName} ${student.lastName}… (${done} of ${items.length})`);
+      try {
+        await classroomClient.returnSubmission(entry.course.id, entry.coursework.id, student.submissionId);
+        results.push({ entry, student, ok: true, message: "Returned" });
+      } catch (err) {
+        results.push({ entry, student, ok: false, message: `Couldn't return: ${err.message}` });
+      }
+    }
+  } finally {
+    hideProgress(progressEl);
+    btn.disabled = false;
+  }
+  return results;
+}
+
+async function returnAlreadyGraded() {
+  const items = unreturnedGradedWork(currentPlan);
+  if (items.length === 0) return;
+  const assignmentCount = new Set(items.map((i) => i.entry)).size;
+  const confirmed = confirm(
+    `Return ${items.length} already-graded submission${items.length === 1 ? "" : "s"} ` +
+      `across ${assignmentCount} assignment${assignmentCount === 1 ? "" : "s"} in ${currentGradeClass}?\n\n` +
+      "Students will see their grades. This can't be undone."
+  );
+  if (!confirmed) return;
+
+  const results = await returnEach(
+    items,
+    document.getElementById("return-backlog-btn"),
+    document.getElementById("submit-progress")
+  );
+  currentPlan = [];
+  renderResults(
+    results.map(({ entry, student, ok, message }) => ({
+      name: `${student.firstName} ${student.lastName}`,
+      lesson: entry.lesson,
+      grade: student.existingGrade,
+      ok,
+      message,
+    }))
+  );
+}
+
+async function returnAlreadyGradedTest() {
+  const entry = currentTestEntry;
+  const items = unreturnedGradedWork([entry]);
+  if (items.length === 0) return;
+  const confirmed = confirm(
+    `Return ${items.length} already-graded submission${items.length === 1 ? "" : "s"} ` +
+      `for "${entry.title}" in ${entry.className}?\n\n` +
+      "Students will see their grades. This can't be undone."
+  );
+  if (!confirmed) return;
+
+  const results = await returnEach(
+    items,
+    document.getElementById("test-return-backlog-btn"),
+    document.getElementById("test-submit-progress")
+  );
+  currentTestEntry = null;
+  renderTestResults(
+    results.map(({ student, ok, message }) => ({
+      name: `${student.firstName} ${student.lastName}`,
+      grade: student.existingGrade,
+      ok,
+      message,
+    }))
+  );
+}
+
 async function submitCheckedGrades() {
   // Only rows currently visible under the Unit/Lesson filter get submitted
   // -- a checkbox left checked inside a filtered-out group (style.display
@@ -745,6 +907,7 @@ async function submitCheckedGrades() {
 
   const btn = document.getElementById("submit-btn");
   const progressEl = document.getElementById("submit-progress");
+  const returnToStudent = document.getElementById("return-graded").checked;
   btn.disabled = true;
 
   const results = [];
@@ -762,24 +925,14 @@ async function submitCheckedGrades() {
         `Grading ${student.firstName} ${student.lastName} — ${entry.lesson}… (${done} of ${checkboxes.length})`
       );
 
-      try {
-        await classroomClient.patchGrade(entry.course.id, entry.coursework.id, student.submissionId, student.grade);
-        results.push({
-          name: `${student.firstName} ${student.lastName}`,
-          lesson: entry.lesson,
-          grade: student.grade,
-          ok: true,
-          error: null,
-        });
-      } catch (err) {
-        results.push({
-          name: `${student.firstName} ${student.lastName}`,
-          lesson: entry.lesson,
-          grade: student.grade,
-          ok: false,
-          error: err.message,
-        });
-      }
+      const { ok, message } = await gradeAndMaybeReturn(entry, student, returnToStudent);
+      results.push({
+        name: `${student.firstName} ${student.lastName}`,
+        lesson: entry.lesson,
+        grade: student.grade,
+        ok,
+        message,
+      });
     }
   } finally {
     hideProgress(progressEl);
@@ -788,6 +941,18 @@ async function submitCheckedGrades() {
 
   currentPlan = [];
   renderResults(results);
+}
+
+/** One results-table row. Cells are set as text, so names and API error messages can't inject markup. */
+function resultRow(ok, cells) {
+  const tr = document.createElement("tr");
+  tr.className = ok ? "ok" : "fail";
+  for (const value of cells) {
+    const td = document.createElement("td");
+    td.textContent = String(value);
+    tr.appendChild(td);
+  }
+  return tr;
 }
 
 function renderResults(results) {
@@ -802,12 +967,7 @@ function renderResults(results) {
     const table = document.createElement("table");
     table.innerHTML = "<tr><th>Student</th><th>Lesson</th><th>Grade</th><th>Result</th></tr>";
     for (const r of results) {
-      const tr = document.createElement("tr");
-      tr.className = r.ok ? "ok" : "fail";
-      tr.innerHTML = `<td>${r.name}</td><td>${r.lesson}</td><td>${r.grade}</td><td>${
-        r.ok ? "Graded" : `Failed: ${r.error}`
-      }</td>`;
-      table.appendChild(tr);
+      table.appendChild(resultRow(r.ok, [r.name, r.lesson, r.grade, r.message]));
     }
     container.appendChild(table);
   }
@@ -1089,6 +1249,7 @@ async function buildTestPlan(csvText, selectedClassName, number, startDate, endD
       } else {
         const turnedIn = submission.state === "TURNED_IN" || submission.state === "RETURNED";
         studentEntry.submissionId = submission.id;
+        studentEntry.submissionState = submission.state;
         studentEntry.turnedIn = turnedIn;
         const existingGrade = submission.assignedGrade === undefined ? null : submission.assignedGrade;
         studentEntry.existingGrade = existingGrade;
@@ -1232,6 +1393,9 @@ function renderTestPreview(entry) {
     container.appendChild(table);
   }
 
+  document.getElementById("test-return-graded").checked = loadPref(RETURN_GRADED_PREF);
+  syncReturnOption("test-return-graded", "test-submit-btn");
+  renderReturnBacklog("test-", [entry], "for this test");
   showTestStep("preview");
 }
 
@@ -1242,6 +1406,7 @@ async function submitCheckedTestGrades() {
   const entry = currentTestEntry;
   const btn = document.getElementById("test-submit-btn");
   const progressEl = document.getElementById("test-submit-progress");
+  const returnToStudent = document.getElementById("test-return-graded").checked;
   btn.disabled = true;
 
   const results = [];
@@ -1258,22 +1423,13 @@ async function submitCheckedTestGrades() {
         `Grading ${student.firstName} ${student.lastName}… (${done} of ${checkboxes.length})`
       );
 
-      try {
-        await classroomClient.patchGrade(entry.course.id, entry.coursework.id, student.submissionId, student.grade);
-        results.push({
-          name: `${student.firstName} ${student.lastName}`,
-          grade: student.grade,
-          ok: true,
-          error: null,
-        });
-      } catch (err) {
-        results.push({
-          name: `${student.firstName} ${student.lastName}`,
-          grade: student.grade,
-          ok: false,
-          error: err.message,
-        });
-      }
+      const { ok, message } = await gradeAndMaybeReturn(entry, student, returnToStudent);
+      results.push({
+        name: `${student.firstName} ${student.lastName}`,
+        grade: student.grade,
+        ok,
+        message,
+      });
     }
   } finally {
     hideProgress(progressEl);
@@ -1296,12 +1452,7 @@ function renderTestResults(results) {
     const table = document.createElement("table");
     table.innerHTML = "<tr><th>Student</th><th>Grade</th><th>Result</th></tr>";
     for (const r of results) {
-      const tr = document.createElement("tr");
-      tr.className = r.ok ? "ok" : "fail";
-      tr.innerHTML = `<td>${r.name}</td><td>${r.grade}</td><td>${
-        r.ok ? "Graded" : `Failed: ${r.error}`
-      }</td>`;
-      table.appendChild(tr);
+      table.appendChild(resultRow(r.ok, [r.name, r.grade, r.message]));
     }
     container.appendChild(table);
   }
@@ -1511,6 +1662,20 @@ document.addEventListener("DOMContentLoaded", () => {
 
   document.getElementById("test-load-btn").addEventListener("click", loadTestClass);
   document.getElementById("test-submit-btn").addEventListener("click", submitCheckedTestGrades);
+
+  // One remembered "also return" setting shared by the Grade and Typing
+  // Test tabs; each preview re-reads it when it renders.
+  for (const [checkboxId, buttonId] of [
+    ["return-graded", "submit-btn"],
+    ["test-return-graded", "test-submit-btn"],
+  ]) {
+    document.getElementById(checkboxId).addEventListener("change", (e) => {
+      savePref(RETURN_GRADED_PREF, e.target.checked);
+      syncReturnOption(checkboxId, buttonId);
+    });
+  }
+  document.getElementById("return-backlog-btn").addEventListener("click", returnAlreadyGraded);
+  document.getElementById("test-return-backlog-btn").addEventListener("click", returnAlreadyGradedTest);
 
   document.getElementById("test-change-class-btn").addEventListener("click", () => {
     currentTestEntry = null;

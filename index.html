@@ -122,8 +122,17 @@
       </p>
       <div id="groups-container"></div>
 
+      <label class="return-option">
+        <input type="checkbox" id="return-graded">
+        Also return graded work to students (only work they turned in)
+      </label>
       <div id="submit-progress" class="progress" hidden></div>
       <button id="submit-btn" type="button">Submit checked grades to Classroom</button>
+
+      <section id="return-backlog" class="subsection" hidden>
+        <p id="return-backlog-text" class="muted"></p>
+        <button id="return-backlog-btn" class="button-link" type="button">Return already-graded work</button>
+      </section>
 
       <section id="remind-section" class="remind-section" hidden>
         <h2 class="section-title">Remind students who forgot to turn in</h2>
@@ -236,8 +245,17 @@
           <p class="muted" id="test-preview-range"></p>
           <button id="test-change-class-btn" class="button-link" type="button">&larr; Change class / window</button>
           <div id="test-groups-container"></div>
+          <label class="return-option">
+            <input type="checkbox" id="test-return-graded">
+            Also return graded work to students (only work they turned in)
+          </label>
           <div id="test-submit-progress" class="progress" hidden></div>
           <button id="test-submit-btn" type="button">Submit checked grades to Classroom</button>
+
+          <section id="test-return-backlog" class="subsection" hidden>
+            <p id="test-return-backlog-text" class="muted"></p>
+            <button id="test-return-backlog-btn" class="button-link" type="button">Return already-graded work</button>
+          </section>
         </div>
 
         <div id="test-results-step" hidden>
